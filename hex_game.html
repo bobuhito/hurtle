@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html>
+<body>
+Mouse inserts, ESC undoes (once!), M toggles marker visibility for available insertion points
+<canvas id="myCanvas"></canvas>
+<script>
+let cvs = document.getElementById("myCanvas");
+let ctx = cvs.getContext("2d");
+
+const xMax        =  1*1560;
+const yMax        =  1*750;
+
+ctx.canvas.width  =  xMax;
+ctx.canvas.height =  yMax;
+
+const xyScale     =  2.0;
+const xyScaleInv  =  1.0/xyScale;
+
+var xMid          =  0.5*xMax;
+var yMid          =  0.5*yMax;
+
+const  xClear = -xMid*xyScaleInv;
+const  yClear = -yMid*xyScaleInv;
+const dxClear =  xMax*xyScaleInv;
+const dyClear =  yMax*xyScaleInv;
+
+ctx.translate(xMid,yMid);
+ctx.scale(xyScale,xyScale);
+
+const s = Math.sqrt(3);
+var c2  = [[0,0, 0,0,  0,0]]; //centroids and possible neighbours of centroids   //[ksx,k1x, ksy,k1y,   type,parent]   //x = s*ksx + k1x   //t "type" includes inversion/odd/even indicator (t<=0 when not displayed)   //p "parent" not used (except for p>=0 when this c2 has already been added to c)  // t<=0 and p>=0
+
+
+//            nose                                                                                    back       back      back
+const po1 = [[[0,0],[0,2],[s,3],[s-1,s+3],[s,2*s+3],[2*s,2*s+2],[3*s,2*s+3],[3*s+1,s+3],[3*s+3,s+3],[3*s+3,s+1],[2*s+3,s],[s+3,s-1],[3,s],[2,0],[0,0]],
+[[0,0],[-1,s],[0,2*s],[-s,2*s+1],[-s,2*s+3],[-s+2,2*s+3],[-s+3,3*s+3],[3,3*s+2],[s+3,3*s+3],[s+4,2*s+3],[s+3,s+3],[s+2,3],[s,3],[s,1],[0,0]],
+[[0,0],[-s,1],[-s,3],[-s-2,3],[-s-3,s+3],[-3,s+4],[-3,s+6],[-1,s+6],[0,2*s+6],[s,2*s+5],[s,2*s+3],[s,2*s+1],[0,2*s],[1,s],[0,0]],
+[[0,0],[-2,0],[-3,s],[-s-3,s-1],[-2*s-3,s],[-2*s-2,2*s],[-2*s-3,3*s],[-s-3,3*s+1],[-s-3,3*s+3],[-s-1,3*s+3],[-s,2*s+3],[-s+1,s+3],[-s,3],[0,2],[0,0]],
+[[0,0],[-s,-1],[-2*s,0],[-2*s-1,-s],[-2*s-3,-s],[-2*s-3,-s+2],[-3*s-3,-s+3],[-3*s-2,3],[-3*s-3,s+3],[-2*s-3,s+4],[-s-3,s+3],[-3,s+2],[-3,s],[-1,s],[0,0]],
+[[0,0],[-1,-s],[-3,-s],[-3,-s-2],[-s-3,-s-3],[-s-4,-3],[-s-6,-3],[-s-6,-1],[-2*s-6,0],[-2*s-5,s],[-2*s-3,s],[-2*s-1,s],[-2*s,0],[-s,1],[0,0]],
+[[0,0],[0,-2],[-s,-3],[-s+1,-s-3],[-s,-2*s-3],[-2*s,-2*s-2],[-3*s,-2*s-3],[-3*s-1,-s-3],[-3*s-3,-s-3],[-3*s-3,-s-1],[-2*s-3,-s],[-s-3,-s+1],[-3,-s],[-2,0],[0,0]],
+[[0,0],[1,-s],[0,-2*s],[s,-2*s-1],[s,-2*s-3],[s-2,-2*s-3],[s-3,-3*s-3],[-3,-3*s-2],[-s-3,-3*s-3],[-s-4,-2*s-3],[-s-3,-s-3],[-s-2,-3],[-s,-3],[-s,-1],[0,0]],
+[[0,0],[s,-1],[s,-3],[s+2,-3],[s+3,-s-3],[3,-s-4],[3,-s-6],[1,-s-6],[0,-2*s-6],[-s,-2*s-5],[-s,-2*s-3],[-s,-2*s-1],[0,-2*s],[-1,-s],[0,0]],
+[[0,0],[2,0],[3,-s],[s+3,-s+1],[2*s+3,-s],[2*s+2,-2*s],[2*s+3,-3*s],[s+3,-3*s-1],[s+3,-3*s-3],[s+1,-3*s-3],[s,-2*s-3],[s-1,-s-3],[s,-3],[0,-2],[0,0]],
+[[0,0],[s,1],[2*s,0],[2*s+1,s],[2*s+3,s],[2*s+3,s-2],[3*s+3,s-3],[3*s+2,-3],[3*s+3,-s-3],[2*s+3,-s-4],[s+3,-s-3],[3,-s-2],[3,-s],[1,-s],[0,0]],
+[[0,0],[1,s],[3,s],[3,s+2],[s+3,s+3],[s+4,3],[s+6,3],[s+6,1],[2*s+6,0],[2*s+5,-s],[2*s+3,-s],[2*s+1,-s],[2*s,0],[s,-1],[0,0]]];
+
+
+
+
+var hex2Lines = new Path2D;
+hex2Lines.moveTo(-3,0);
+hex2Lines.lineTo( 3,0);
+hex2Lines.lineTo( 0,3);
+hex2Lines.lineTo(-3,0);
+
+
+
+var h = [];
+
+h.push([-10,-20,     8, -6]);
+h.push([  8, -2,   -14,-12]);
+h.push([  2, 22,     6, 18]);
+
+h.push([  1,-27,    -13,-27]);
+h.push([ 13, 33,     -7, 15]);
+h.push([-14, -6,     20, 12]);
+
+
+
+hexLines = new Path2D;  //inner triangle, but becomes bigger when chifted to hex form
+hexLines.moveTo(0,0);
+hexLines.lineTo( s*h[3][0]+h[3][1],  s*h[3][2]+h[3][3]);
+hexLines.lineTo(-s*h[4][0]-h[4][1], -s*h[4][2]-h[4][3]);
+hexLines.lineTo(0,0);
+hexLines.lineTo( s*h[4][0]+h[4][1],  s*h[4][2]+h[4][3]);
+hexLines.lineTo(-s*h[5][0]-h[5][1], -s*h[5][2]-h[5][3]);
+hexLines.lineTo(0,0);
+hexLines.lineTo( s*h[5][0]+h[5][1],  s*h[5][2]+h[5][3]);
+hexLines.lineTo(-s*h[3][0]-h[3][1], -s*h[3][2]-h[3][3]);
+hexLines.lineTo(0,0);
+
+
+mysLines = new Path2D;  //outer triangles, already hex form
+mysLines.moveTo(0,0);
+//mysLines.lineTo( s*(h[1][0]-h[0][0])+h[1][1]-h[0][1],  s*(h[1][2]-h[0][2])+h[1][3]-h[0][3]);
+//mysLines.lineTo( s*(h[2][0]-h[0][0])+h[2][1]-h[0][1],  s*(h[2][2]-h[0][2])+h[2][3]-h[0][3]);
+mysLines.lineTo( s*h[0][0]+h[0][1],  s*h[0][2]+h[0][3]);
+mysLines.lineTo(-s*h[1][0]-h[1][1], -s*h[1][2]-h[1][3]);
+mysLines.lineTo(0,0);
+mysLines.lineTo( s*h[1][0]+h[1][1],  s*h[1][2]+h[1][3]);
+mysLines.lineTo(-s*h[2][0]-h[2][1], -s*h[2][2]-h[2][3]);
+mysLines.lineTo(0,0);
+mysLines.lineTo( s*h[2][0]+h[2][1],  s*h[2][2]+h[2][3]);
+mysLines.lineTo(-s*h[0][0]-h[0][1], -s*h[0][2]-h[0][3]);
+mysLines.lineTo(0,0);
+
+
+
+
+
+ctx.lineWidth = 0.1; ctx.strokeStyle = "black";
+var MARKERS=1;
+function plotHexes() { ctx.clearRect(xClear, yClear, dxClear, dyClear);    
+    for (var i0=0; i0 < c2.length; i0++) {
+        ctx.translate( s*c2[i0][0]+c2[i0][1], s*c2[i0][2]+c2[i0][3]);
+        if (c2[i0][4]%2) ctx.scale(-1,-1);
+        if (c2[i0][5] >= 0) { if (c2[i0][4] > 0) alert("BUG ERROR: centroid has a parent but its potential insert marking is not deactivated: #" + i0 + ": " + c2[i0]);
+            ctx.fillStyle = "rgba(0, 0, 255, 0.2)";
+            //ctx.fillStyle = "lightBlue";
+            ctx.fill(hexLines);
+            ctx.stroke(hexLines);
+            ctx.fillStyle = "rgba(255, 0, 0, 0.2)";
+            //ctx.fillStyle = "pink";
+            ctx.fill(mysLines);
+            ctx.stroke(mysLines);
+        }
+        else if ((MARKERS != 0)&&(c2[i0][4] > 0)) {
+            ctx.fillStyle = "green";
+            ctx.fill(hex2Lines);
+            //ctx.stroke(hex2Lines);
+        }
+        if (c2[i0][4]%2) ctx.scale(-1,-1);
+        ctx.translate(-s*c2[i0][0]-c2[i0][1],-s*c2[i0][2]-c2[i0][3]);   
+}}
+
+
+const RSQMIN     = 3100;      //really just needs to be more than 24*27*s + 1968 ~ 3090.37, but too much more will prevent some markers that might truly be possible
+var deactivated  = [];
+var iAdd         = 0;
+
+const RSQCHECK   = 4*xyScale*xyScale*RSQMIN;  //this can be infinite (and is infinite in principle), but is made finitely as small as possible to save time and only do double-takes on the closer values in check[]
+var check        = [];
+
+function expandc2() { const ci0 = c2[iAdd][0]; const ci1 = c2[iAdd][1]; const ci2 = c2[iAdd][2]; const ci3 = c2[iAdd][3]; const ci4 = c2[iAdd][4]; var ksx, k1x, ksy, k1y, t, p, iCheck;
+    //p = -c2.length;  //ok (since c2.length=1 for first potential inserts)
+    p = -(iAdd+1);     //ok, but needed p<0 for every allowed iAdd (and iAdd=0 will be used for first potential inserts) so that switching its sign will be a good toggle/indicator of using it
+    
+    //only push new points to potential c2 and only push points with proper spacing to the used c2:
+    t = ci4+1;
+    if (ci4%2 != 0) {
+    ksx = ci0+h[0][0]; k1x = ci1+h[0][1]; ksy = ci2+h[0][2]; k1y = ci3+h[0][3];   for (var ipt=0; ipt < check.length; ipt++) {iCheck = check[ipt]; const d0 = ksx-c2[iCheck][0]; const d1 = k1x-c2[iCheck][1]; const d2 = ksy-c2[iCheck][2]; const d3 = k1y-c2[iCheck][3]; if (c2[iCheck][5]>=0) {const dr0 = d0*d1 + d2*d3; const dr1 = 3*(d0*d0 + d2*d2) + d1*d1 + d3*d3; if ((s*2*dr0 + dr1 < RSQMIN)&&((dr0 != 324)||(dr1 != 1968))&&((dr0 != 152)||(dr1 !=  928))) break;} else {if ((d0==1)&&(d1==0)&&(d2==0)&&(d3==0)) break;}} if (ipt==check.length) c2.push([ksx,k1x,ksy,k1y,t,p]);
+    ksx = ci0+h[1][0]; k1x = ci1+h[1][1]; ksy = ci2+h[1][2]; k1y = ci3+h[1][3];   for (var ipt=0; ipt < check.length; ipt++) {iCheck = check[ipt]; const d0 = ksx-c2[iCheck][0]; const d1 = k1x-c2[iCheck][1]; const d2 = ksy-c2[iCheck][2]; const d3 = k1y-c2[iCheck][3]; if (c2[iCheck][5]>=0) {const dr0 = d0*d1 + d2*d3; const dr1 = 3*(d0*d0 + d2*d2) + d1*d1 + d3*d3; if ((s*2*dr0 + dr1 < RSQMIN)&&((dr0 != 324)||(dr1 != 1968))&&((dr0 != 152)||(dr1 !=  928))) break;} else {if ((d0==1)&&(d1==0)&&(d2==0)&&(d3==0)) break;}} if (ipt==check.length) c2.push([ksx,k1x,ksy,k1y,t,p]);
+    ksx = ci0+h[2][0]; k1x = ci1+h[2][1]; ksy = ci2+h[2][2]; k1y = ci3+h[2][3];   for (var ipt=0; ipt < check.length; ipt++) {iCheck = check[ipt]; const d0 = ksx-c2[iCheck][0]; const d1 = k1x-c2[iCheck][1]; const d2 = ksy-c2[iCheck][2]; const d3 = k1y-c2[iCheck][3]; if (c2[iCheck][5]>=0) {const dr0 = d0*d1 + d2*d3; const dr1 = 3*(d0*d0 + d2*d2) + d1*d1 + d3*d3; if ((s*2*dr0 + dr1 < RSQMIN)&&((dr0 != 324)||(dr1 != 1968))&&((dr0 != 152)||(dr1 !=  928))) break;} else {if ((d0==1)&&(d1==0)&&(d2==0)&&(d3==0)) break;}} if (ipt==check.length) c2.push([ksx,k1x,ksy,k1y,t,p]);    
+    }
+    else {
+    ksx = ci0-h[0][0]; k1x = ci1-h[0][1]; ksy = ci2-h[0][2]; k1y = ci3-h[0][3];   for (var ipt=0; ipt < check.length; ipt++) {iCheck = check[ipt]; const d0 = ksx-c2[iCheck][0]; const d1 = k1x-c2[iCheck][1]; const d2 = ksy-c2[iCheck][2]; const d3 = k1y-c2[iCheck][3]; if (c2[iCheck][5]>=0) {const dr0 = d0*d1 + d2*d3; const dr1 = 3*(d0*d0 + d2*d2) + d1*d1 + d3*d3; if ((s*2*dr0 + dr1 < RSQMIN)&&((dr0 != 324)||(dr1 != 1968))&&((dr0 != 152)||(dr1 !=  928))) break;} else {if ((d0==1)&&(d1==0)&&(d2==0)&&(d3==0)) break;}} if (ipt==check.length) c2.push([ksx,k1x,ksy,k1y,t,p]);
+    ksx = ci0-h[1][0]; k1x = ci1-h[1][1]; ksy = ci2-h[1][2]; k1y = ci3-h[1][3];   for (var ipt=0; ipt < check.length; ipt++) {iCheck = check[ipt]; const d0 = ksx-c2[iCheck][0]; const d1 = k1x-c2[iCheck][1]; const d2 = ksy-c2[iCheck][2]; const d3 = k1y-c2[iCheck][3]; if (c2[iCheck][5]>=0) {const dr0 = d0*d1 + d2*d3; const dr1 = 3*(d0*d0 + d2*d2) + d1*d1 + d3*d3; if ((s*2*dr0 + dr1 < RSQMIN)&&((dr0 != 324)||(dr1 != 1968))&&((dr0 != 152)||(dr1 !=  928))) break;} else {if ((d0==1)&&(d1==0)&&(d2==0)&&(d3==0)) break;}} if (ipt==check.length) c2.push([ksx,k1x,ksy,k1y,t,p]);
+    ksx = ci0-h[2][0]; k1x = ci1-h[2][1]; ksy = ci2-h[2][2]; k1y = ci3-h[2][3];   for (var ipt=0; ipt < check.length; ipt++) {iCheck = check[ipt]; const d0 = ksx-c2[iCheck][0]; const d1 = k1x-c2[iCheck][1]; const d2 = ksy-c2[iCheck][2]; const d3 = k1y-c2[iCheck][3]; if (c2[iCheck][5]>=0) {const dr0 = d0*d1 + d2*d3; const dr1 = 3*(d0*d0 + d2*d2) + d1*d1 + d3*d3; if ((s*2*dr0 + dr1 < RSQMIN)&&((dr0 != 324)||(dr1 != 1968))&&((dr0 != 152)||(dr1 !=  928))) break;} else {if ((d0==1)&&(d1==0)&&(d2==0)&&(d3==0)) break;}} if (ipt==check.length) c2.push([ksx,k1x,ksy,k1y,t,p]);    
+    }
+    t = ci4+2;
+    ksx = ci0+h[3][0]; k1x = ci1+h[3][1]; ksy = ci2+h[3][2]; k1y = ci3+h[3][3];   for (var ipt=0; ipt < check.length; ipt++) {iCheck = check[ipt]; const d0 = ksx-c2[iCheck][0]; const d1 = k1x-c2[iCheck][1]; const d2 = ksy-c2[iCheck][2]; const d3 = k1y-c2[iCheck][3]; if (c2[iCheck][5]>=0) {const dr0 = d0*d1 + d2*d3; const dr1 = 3*(d0*d0 + d2*d2) + d1*d1 + d3*d3; if ((s*2*dr0 + dr1 < RSQMIN)&&((dr0 != 324)||(dr1 != 1968))&&((dr0 != 152)||(dr1 !=  928))) break;} else {if ((d0==1)&&(d1==0)&&(d2==0)&&(d3==0)) break;}} if (ipt==check.length) c2.push([ksx,k1x,ksy,k1y,t,p]);
+    ksx = ci0+h[4][0]; k1x = ci1+h[4][1]; ksy = ci2+h[4][2]; k1y = ci3+h[4][3];   for (var ipt=0; ipt < check.length; ipt++) {iCheck = check[ipt]; const d0 = ksx-c2[iCheck][0]; const d1 = k1x-c2[iCheck][1]; const d2 = ksy-c2[iCheck][2]; const d3 = k1y-c2[iCheck][3]; if (c2[iCheck][5]>=0) {const dr0 = d0*d1 + d2*d3; const dr1 = 3*(d0*d0 + d2*d2) + d1*d1 + d3*d3; if ((s*2*dr0 + dr1 < RSQMIN)&&((dr0 != 324)||(dr1 != 1968))&&((dr0 != 152)||(dr1 !=  928))) break;} else {if ((d0==1)&&(d1==0)&&(d2==0)&&(d3==0)) break;}} if (ipt==check.length) c2.push([ksx,k1x,ksy,k1y,t,p]);
+    ksx = ci0+h[5][0]; k1x = ci1+h[5][1]; ksy = ci2+h[5][2]; k1y = ci3+h[5][3];   for (var ipt=0; ipt < check.length; ipt++) {iCheck = check[ipt]; const d0 = ksx-c2[iCheck][0]; const d1 = k1x-c2[iCheck][1]; const d2 = ksy-c2[iCheck][2]; const d3 = k1y-c2[iCheck][3]; if (c2[iCheck][5]>=0) {const dr0 = d0*d1 + d2*d3; const dr1 = 3*(d0*d0 + d2*d2) + d1*d1 + d3*d3; if ((s*2*dr0 + dr1 < RSQMIN)&&((dr0 != 324)||(dr1 != 1968))&&((dr0 != 152)||(dr1 !=  928))) break;} else {if ((d0==1)&&(d1==0)&&(d2==0)&&(d3==0)) break;}} if (ipt==check.length) c2.push([ksx,k1x,ksy,k1y,t,p]);    
+    ksx = ci0-h[3][0]; k1x = ci1-h[3][1]; ksy = ci2-h[3][2]; k1y = ci3-h[3][3];   for (var ipt=0; ipt < check.length; ipt++) {iCheck = check[ipt]; const d0 = ksx-c2[iCheck][0]; const d1 = k1x-c2[iCheck][1]; const d2 = ksy-c2[iCheck][2]; const d3 = k1y-c2[iCheck][3]; if (c2[iCheck][5]>=0) {const dr0 = d0*d1 + d2*d3; const dr1 = 3*(d0*d0 + d2*d2) + d1*d1 + d3*d3; if ((s*2*dr0 + dr1 < RSQMIN)&&((dr0 != 324)||(dr1 != 1968))&&((dr0 != 152)||(dr1 !=  928))) break;} else {if ((d0==1)&&(d1==0)&&(d2==0)&&(d3==0)) break;}} if (ipt==check.length) c2.push([ksx,k1x,ksy,k1y,t,p]);
+    ksx = ci0-h[4][0]; k1x = ci1-h[4][1]; ksy = ci2-h[4][2]; k1y = ci3-h[4][3];   for (var ipt=0; ipt < check.length; ipt++) {iCheck = check[ipt]; const d0 = ksx-c2[iCheck][0]; const d1 = k1x-c2[iCheck][1]; const d2 = ksy-c2[iCheck][2]; const d3 = k1y-c2[iCheck][3]; if (c2[iCheck][5]>=0) {const dr0 = d0*d1 + d2*d3; const dr1 = 3*(d0*d0 + d2*d2) + d1*d1 + d3*d3; if ((s*2*dr0 + dr1 < RSQMIN)&&((dr0 != 324)||(dr1 != 1968))&&((dr0 != 152)||(dr1 !=  928))) break;} else {if ((d0==1)&&(d1==0)&&(d2==0)&&(d3==0)) break;}} if (ipt==check.length) c2.push([ksx,k1x,ksy,k1y,t,p]);
+    ksx = ci0-h[5][0]; k1x = ci1-h[5][1]; ksy = ci2-h[5][2]; k1y = ci3-h[5][3];   for (var ipt=0; ipt < check.length; ipt++) {iCheck = check[ipt]; const d0 = ksx-c2[iCheck][0]; const d1 = k1x-c2[iCheck][1]; const d2 = ksy-c2[iCheck][2]; const d3 = k1y-c2[iCheck][3]; if (c2[iCheck][5]>=0) {const dr0 = d0*d1 + d2*d3; const dr1 = 3*(d0*d0 + d2*d2) + d1*d1 + d3*d3; if ((s*2*dr0 + dr1 < RSQMIN)&&((dr0 != 324)||(dr1 != 1968))&&((dr0 != 152)||(dr1 !=  928))) break;} else {if ((d0==1)&&(d1==0)&&(d2==0)&&(d3==0)) break;}} if (ipt==check.length) c2.push([ksx,k1x,ksy,k1y,t,p]);    
+
+    //need to deactivate old c2 elements which are too close to c2[iAdd] (including c2[iAdd] itself) with at least one permitted small value, but also want to allow undo of this
+    //allow:   rsq = (14*s+6)^2 + (20*s+12)^2 = 14*14*3 + 36 + 20*20*3 + 12*12 + 14*12*s + 20*24*s  = 24*27*s + 1968 ~ 3090.37
+    //allow:   rsq = (10*s+20)^2 + (8*s-6)^2  = 100*3 +400   + 8*8*3 + 36 +  20*20*s -8*12*s        = 16*19*s + 928  ~ 1454.54
+    //forbid:  rsq = (4*s-14)^2 + (12*s+18)^2 = 4*4*3 + 14*14  + 12*12*3 + 18*18 + 24*18*s - 8*14*s = 16*20*s + 1000 ~ 1554.26
+    //forbid:  rsq = (3*s+13)^2 + (s+9)^2     = 27 + 13^2 + 3+81 + 6*13*s + 2*9*s                   = 6*16*s + 280   ~  446.28
+
+    deactivated = [];   for (var ipt=0; ipt < check.length; ipt++) {iCheck = check[ipt]; if (c2[iCheck][4]>0) {const d0 = ci0-c2[iCheck][0]; const d1 = ci1-c2[iCheck][1]; const d2 = ci2-c2[iCheck][2]; const d3 = ci3-c2[iCheck][3]; const dr0 = d0*d1 + d2*d3; const dr1 = 3*(d0*d0 + d2*d2) + d1*d1 + d3*d3; if ((s*2*dr0 + dr1 < RSQMIN)&&((dr0 != 324)||(dr1 != 1968))&&((dr0 != 152)||(dr1 !=  928))) deactivated.push(iCheck);}}
+    for (var ipt=0; ipt < deactivated.length; ipt++) {if (c2[deactivated[ipt]][4]<=0) alert("BUG ERROR: negative type should only be deactivated in special custom versions"); c2[deactivated[ipt]][4] = -Math.abs(c2[deactivated[ipt]][4]);}
+    
+    plotHexes();
+}
+expandc2();
+
+document.onkeydown = function(e) {
+    if      (e.key == "Escape") { c2[iAdd][5] = -c2[iAdd][5];
+        if (0&&(c2.length == c2_length)) { alert("2nd Consecutive ESC allowed some easy features/bugs:\n    re-inserts, etc\n    un-inserts a nearly-clicked old point\n    ...but adds redundant points causing phantom markers\n    even 1st ESC has corrupted iAdd if extra click is made");
+            c2[iAdd][4] = -c2[iAdd][4];}
+        else {
+            c2.length = c2_length; for (var ipt=0; ipt < deactivated.length; ipt++) {if (c2[deactivated[ipt]][4]>=0) alert("2nd Consecutive ESC caused UNDO BUG ERROR: negative type should only be deactivated in special custom versions"); c2[deactivated[ipt]][4] = Math.abs(c2[deactivated[ipt]][4]);}}
+        plotHexes();}
+    else if (e.key == "m") {MARKERS = 1-MARKERS; plotHexes();}}
+
+cvs.onmousedown = function(e) {
+    const lastX = e.pageX - this.offsetLeft - xMid;
+    const lastY = e.pageY - this.offsetTop  - yMid;
+    var rsq_min=100*xyScale*xyScale;
+    check=[];
+    for (var ipt=0; ipt < c2.length; ipt++) {
+        const dx = lastX - xyScale*(s*c2[ipt][0]+c2[ipt][1]); const dy = lastY - xyScale*(s*c2[ipt][2]+c2[ipt][3]); const rsq = dx*dx + dy*dy;
+        if (rsq_min > rsq) {rsq_min = rsq; iAdd = ipt;}  //even 1st ESC will corrupt iAdd and therefore change the undo function (but undoing an old iAdd can be considered a feature!) - anyway, why is user clicking close to points if he really wants a normal last-move-undo?
+        if (rsq < RSQCHECK) check.push(ipt);}
+    if ((rsq_min < 10*xyScale*xyScale)&&(c2[iAdd][4] > 0)) {c2_length = c2.length; c2[iAdd][5] = -c2[iAdd][5]; //alert("adding hex at #" + iAdd + ": " + c2[iAdd]); 
+        expandc2();
+        }}
+</script>
+</body>
+</html>
