@@ -142,7 +142,7 @@ const RSQMIN     = 3100;      //really just needs to be more than 24*27*s + 1968
 var deactivated  = [];
 var iAdd         = 0;
 
-const RSQCHECK   = 9*RSQMIN;  //this can be infinite (and is infinite in principle), but is made finitely as small as possible to save time and only do double-takes on the closer values in check[]
+const RSQCHECK   = 4*xyScale*xyScale*RSQMIN;  //this can be infinite (and is infinite in principle), but is made finitely as small as possible to save time and only do double-takes on the closer values in check[]
 var check        = [];
 
 
