@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Cairo Pentagon Tiling</title>
+  <style>
+    canvas { border: 1px solid #ccc; background: #fafafa; cursor: crosshair; }
+    body { font-family: sans-serif; margin: 20px; }
+  </style>
+</head>
+<body>
+<canvas id="myCanvas" width="600" height="600"></canvas>
+<p>• <strong>Hover</strong> near the middle of a long edge to preview snap options.<br>
+• Press <strong>Spacebar</strong> to toggle between the two placement options.<br>
+• <strong>Left Click</strong> to place the previewed tile.<br>
+• Press <strong>Backspace</strong> to undo placements.</p>
+<script>
+
+const canvas = document.getElementById('myCanvas');
+const ctx = canvas.getContext('2d');
+
+const sqrt3 = Math.sqrt(3);
+const drawScale = 8;
+const drawWby2 = canvas.width / 2;
+const drawHby2 = canvas.height / 2;
+
+const baseVertices = [
+  [ 2, -2,     0, 0],
+  [ 2,  0,     2, 0],
+  [ 0,  0,     2, 2],
+  [-2,  0,     2, 0],
+  [-2,  2,     0, 0]
+];
+
+// Master list of edge midpoints: [cx, dx, cy, dy, angle_idx, paired]
+const mids = [
+  [ 2, -1,     1, 0,      2,      0],
+  [ 1,  0,     2, 1,      5,      0],
+  [-1,  0,     2, 1,      7,      0],
+  [-2,  1,     1, 0,     10,      0]
+];
+
+//shift the first edge midpoint to be at origin to make setTransform easier during draw:
+const shift = [-2, 1, -1, 0];
+const applyShift = matrix => matrix.forEach(row => { for (let i = 0; i < shift.length; i++) row[i] += shift[i] });
+applyShift(baseVertices);
+applyShift(mids);
+
+const undoStack = [];
+let hoveredMidIdx = -1;
+let currentOptionIdx = 0;
+
+// Exact trig components for k * 30 deg: [ca, cb, sa, sb]
+const TRIG30 = [
+  [ 0, 2,  0, 0], // 0 deg
+  [ 1, 0,  0, 1], // 30 deg
+  [ 0, 1,  1, 0], // 60 deg
+  [ 0, 0,  0, 2], // 90 deg
+  [ 0,-1,  1, 0], // 120 deg
+  [-1, 0,  0, 1], // 150 deg
+  [ 0,-2,  0, 0], // 180 deg
+  [-1, 0,  0,-1], // 210 deg
+  [ 0,-1, -1, 0], // 240 deg
+  [ 0, 0,  0,-2], // 270 deg
+  [ 0, 1, -1, 0], // 300 deg
+  [ 1, 0,  0,-1]  // 330 deg
+];
+
+function transformTuple(pt, mirror, k) {
+  let ax = pt[0], bx = pt[1], ay = pt[2], by = pt[3];
+  if (mirror) { ay = -ay; by = -by; }
+  const [ca, cb, sa, sb] = TRIG30[k];
+  return [
+    ((ax * cb + bx * ca) - (ay * sb + by * sa)) / 2,
+    ((3 * ax * ca + bx * cb) - (3 * ay * sa + by * sb)) / 2,
+    ((ax * sb + bx * sa) + (ay * cb + by * ca)) / 2,
+    ((3 * ax * sa + bx * sb) + (3 * ay * ca + by * cb)) / 2
+  ];
+}
+function addTuples(t1, t2) { return [t1[0] + t2[0], t1[1] + t2[1], t1[2] + t2[2], t1[3] + t2[3]]; }
+function subTuples(t1, t2) { return [t1[0] - t2[0], t1[1] - t2[1], t1[2] - t2[2], t1[3] - t2[3]]; }
+function toFP(t) { return [sqrt3 * t[0] + t[1], sqrt3 * t[2] + t[3]]; }
+
+// Build reusable Path2D from baseVertices
+const pentagonPath = new Path2D();
+baseVertices.map(toFP).forEach(([x, y], i) => {
+  i === 0 ? pentagonPath.moveTo(x, y) : pentagonPath.lineTo(x, y);
+});
+pentagonPath.closePath();
+
+function getCandidates(targetIdx) {
+  const Et = mids[targetIdx];
+  const targetM = Et.slice(0, 4);
+  const At = Et[4];
+  const targetPos = targetIdx % 4;
+  const candidates = [];
+  for (let i = 0; i < 4; i++) {
+    if ((targetPos % 2) === (i % 2)) continue;
+
+    const Ai = mids[i][4];
+    const m = 0;
+    const k = (At + 6 - Ai + 12) % 12;
+    const candMidI = transformTuple(mids[i].slice(0, 4), m, k);
+    const translation = subTuples(targetM, candMidI);
+
+    const cVerts = baseVertices.map(v => addTuples(transformTuple(v, m, k), translation));
+    const cMids = mids.slice(0, 4).map(bm => {
+      const transformedM = addTuples(transformTuple(bm.slice(0, 4), m, k), translation);
+      const nAngle = (bm[4] + k) % 12;
+      return [...transformedM, nAngle, 0];});
+
+    candidates.push({ verts: cVerts, mids: cMids });}
+  return candidates;
+}
+
+function undo() {
+  if (undoStack.length === 0) return;
+  const lastAction = undoStack.pop();
+  mids.length -= lastAction.numNewMids;
+  lastAction.pairedIndices.forEach(idx => {
+    if (idx < mids.length) {
+      mids[idx][5] = 0;
+    }});
+  hoveredMidIdx = -1;
+  draw();
+}
+
+function draw() {
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.restore();
+  ctx.save();
+
+  for (let i = 0; i < mids.length; i += 4) {
+    const m = mids[i];
+    const [tx, ty] = toFP(m);
+
+    const [ca, cb, sa, sb] = TRIG30[(m[4] + 10) % 12];   //10%12 is effectively subtracting of mids[0][0]
+    const cos = (ca * sqrt3 + cb) / 2;
+    const sin = (sa * sqrt3 + sb) / 2;
+
+    const a =  drawScale * cos;
+    const b =  drawScale * sin;
+    const c = -drawScale * sin;
+    const d =  drawScale * cos;
+    const e =  drawScale * tx   + drawWby2;
+    const f =  drawScale * ty   + drawHby2;
+
+    ctx.setTransform(a, b, c, d, e, f);
+    ctx.fillStyle = '#94a3b8';
+    ctx.fill(pentagonPath);
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = 0.5 / drawScale;
+    ctx.stroke(pentagonPath);
+  }
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.translate(drawWby2, drawHby2);
+  ctx.scale(drawScale, drawScale);
+
+  // Highlight candidate preview if hovering
+  if (hoveredMidIdx !== -1) {
+    const candidates = getCandidates(hoveredMidIdx);
+    if (candidates.length > 0) {
+      const cand = candidates[currentOptionIdx % candidates.length];
+      const fps = cand.verts.map(toFP);
+      ctx.beginPath();
+      ctx.moveTo(...fps[0]);
+      for (let i = 1; i < fps.length; i++) ctx.lineTo(...fps[i]);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
+      ctx.fill();
+      ctx.strokeStyle = '#2563eb';
+      ctx.lineWidth = 0.75;
+      ctx.stroke();
+    }
+  }
+
+  // Draw midpoint indicators
+  mids.forEach((m, idx) => {
+    if (m[5] === 0) {
+      const fp = toFP(m);
+      ctx.fillStyle = (idx === hoveredMidIdx) ? '#ef4444' : '#3b82f6';
+      ctx.beginPath();
+      ctx.arc(fp[0], fp[1], (idx === hoveredMidIdx) ? 0.8 : 0.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+
+  ctx.restore();
+}
+
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left - drawWby2) / drawScale;
+  const my = (e.clientY - rect.top  - drawHby2) / drawScale;
+
+  let minDist = Infinity;
+  let nearest = -1;
+
+  for (let i = 0; i < mids.length; i++) {
+    if (mids[i][5] === 1) continue;
+    const fp = toFP(mids[i]);
+    const d = Math.hypot(mx - fp[0], my - fp[1]);
+    if (d < minDist) {
+      minDist = d;
+      nearest = i;
+    }
+  }
+
+  if (minDist < 6) {
+    if (hoveredMidIdx !== nearest) {
+      hoveredMidIdx = nearest;
+      currentOptionIdx = 0;
+    }
+  } else {
+    hoveredMidIdx = -1;
+  }
+  draw();
+});
+
+canvas.addEventListener('click', async () => {
+  if (hoveredMidIdx === -1) return;
+
+  const candidates = getCandidates(hoveredMidIdx);
+  if (candidates.length === 0) return;
+
+  const selected = candidates[currentOptionIdx % candidates.length];
+
+  const pairedIndices = [hoveredMidIdx];
+  mids[hoveredMidIdx][5] = 1;
+
+  selected.mids.forEach(cM => {
+    for (let i = 0; i < mids.length; i++) {
+      let existing = mids[i];
+      if (existing[0] === cM[0] && existing[1] === cM[1] &&
+          existing[2] === cM[2] && existing[3] === cM[3]) {
+        if (existing[5] === 0) {
+          existing[5] = 1;
+          pairedIndices.push(i);
+        }
+        cM[5] = 1;
+        break;
+      }
+    }
+  });
+
+  undoStack.push({
+    pairedIndices: pairedIndices,
+    numNewMids: selected.mids.length
+  });
+
+  selected.mids.forEach(cM => mids.push(cM));
+
+  const bufferData = new Int32Array(selected.mids.flat()).buffer;
+  await fetch('cgi-bin/append.cgi', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: bufferData
+  });
+
+  hoveredMidIdx = -1;
+  draw();
+});
+
+window.addEventListener('keydown', async e => {
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (hoveredMidIdx !== -1) {
+      const candidates = getCandidates(hoveredMidIdx);
+      if (candidates.length > 0) {
+        currentOptionIdx = (currentOptionIdx + 1) % candidates.length;
+        draw();}}
+  } else if (e.code === 'KeyS') {
+    e.preventDefault();
+    const response = await fetch('state.bin', { cache: 'no-cache' });
+    const bufferData = await response.arrayBuffer();
+    const flatInts = new Int32Array(bufferData);
+    //mids = [];
+    mids.length = 4;
+    for (let i = 0; i < flatInts.length; i += 6) {
+      mids.push(Array.from(flatInts.subarray(i, i + 6)));
+    }
+    draw();
+  } else if (e.code === 'KeyU' || e.code === 'Backspace') {
+    e.preventDefault();
+    undo();
+  } else if (e.code === 'KeyR') {
+    e.preventDefault();
+    await fetch('cgi-bin/reset.cgi', {
+      method: 'POST',
+    });
+  }
+});
+
+draw();
+</script>
+</body>
+</html>
