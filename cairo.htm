@@ -254,7 +254,7 @@ canvas.addEventListener('click', async () => {
   selected.mids.forEach(cM => mids.push(cM));
 
   const bufferData = new Int32Array(selected.mids.flat()).buffer;
-  await fetch('cgi-bin/append.cgi', {
+  await fetch('/cgi-bin/append.cgi', {
     method: 'POST',
     headers: { 'Content-Type': 'application/octet-stream' },
     body: bufferData
@@ -274,7 +274,7 @@ window.addEventListener('keydown', async e => {
         draw();}}
   } else if (e.code === 'KeyS') {
     e.preventDefault();
-    const response = await fetch('state.bin', { cache: 'no-cache' });
+    const response = await fetch('/state.bin', { cache: 'no-cache' });
     const bufferData = await response.arrayBuffer();
     const flatInts = new Int32Array(bufferData);
     //mids = [];
@@ -288,7 +288,7 @@ window.addEventListener('keydown', async e => {
     undo();
   } else if (e.code === 'KeyR') {
     e.preventDefault();
-    await fetch('cgi-bin/reset.cgi', {
+    await fetch('/cgi-bin/reset.cgi', {
       method: 'POST',
     });
   }
