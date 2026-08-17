@@ -254,9 +254,9 @@ canvas.addEventListener('click', async () => {
   selected.mids.forEach(cM => mids.push(cM));
 
   const bufferData = new Int32Array(selected.mids.flat()).buffer;
-  await fetch('/cgi-bin/append.cgi', {
+  fetch('http://192.168.1.1:8080/', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/octet-stream' },
+    mode: 'no-cors',
     body: bufferData
   });
 
