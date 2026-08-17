@@ -253,11 +253,11 @@ canvas.addEventListener('click', async () => {
 
   selected.mids.forEach(cM => mids.push(cM));
 
-  const bufferData = new Int32Array(selected.mids.flat()).buffer;
+  const payloadText = JSON.stringify(selected.mids) + '\n';
   fetch('http://192.168.1.1:8080/', {
     method: 'POST',
-    mode: 'no-cors',
-    body: bufferData
+    headers: { 'Content-Type': 'text/plain' },
+    body: payloadText
   });
 
   hoveredMidIdx = -1;
@@ -274,14 +274,13 @@ window.addEventListener('keydown', async e => {
         draw();}}
   } else if (e.code === 'KeyS') {
     e.preventDefault();
-    const response = await fetch('/state.bin', { cache: 'no-cache' });
-    const bufferData = await response.arrayBuffer();
-    const flatInts = new Int32Array(bufferData);
+    const res = await fetch('/state.txt', { cache: 'no-cache' });
+    const text = await res.text();
     //mids = [];
     mids.length = 4;
-    for (let i = 0; i < flatInts.length; i += 6) {
-      mids.push(Array.from(flatInts.subarray(i, i + 6)));
-    }
+    text.split('\n')
+      .filter(line => line.startsWith('[['))
+      .forEach(line => { const rows = JSON.parse(line); mids.push(...rows); });
     draw();
   } else if (e.code === 'KeyU' || e.code === 'Backspace') {
     e.preventDefault();
