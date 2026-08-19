@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>DD-WRT Canvas P2P Game + Voice</title>
+  <style>
+    body { font-family: sans-serif; background: #121212; color: #eee; text-align: center; margin: 0; padding: 15px; }
+    canvas { background: #1a1a1a; border: 1px solid #444; cursor: crosshair; margin-top: 10px; }
+    input, button { padding: 4px; margin: 4px; background: #222; color: #fff; border: 1px solid #555; border-radius: 4px; vertical-align: middle; }
+    input[type="color"] { width: 40px; height: 28px; cursor: pointer; padding: 0; }
+  </style>
+</head>
+<body>
+  <h2>Tic-Tac-Toe + Voice Room</h2>
+  <label>Color: <input type="color" id="myColor" value="#3498db" onchange="updateID()"></label>
+  <input id="myName" value="Alice" placeholder="Name" style="width:70px" oninput="updateID()">
+  <button onclick="startVoice()">🎙️ Mic On</button>
+  <button onclick="loadBoard()">🔄 Sync Board</button>
+  <br>
+  <canvas id="cvs" width="700" height="700"></canvas>
+  <div id="audios"></div>
+
+  <script>
+    const N = 10, SIZE = 700, CELL = SIZE / N;
+    let ID;
+
+    myColor.value = '#' + Math.floor(Math.random() * 0xFFFFFF).toString(16).padStart(6, '0');
+    myName.value = String.fromCharCode(65 + Math.floor(Math.random() * 26));
+
+    const updateID = () => { ID = myColor.value.slice(1) + myName.value.replace(/[^a-zA-Z0-9]/g, ''); };
+    updateID();
+
+    const pcs = {}, dcs = [], moves = [], ctx = cvs.getContext('2d');
+    let stream, hoverCell = null;
+
+    function draw() {
+      ctx.clearRect(0, 0, SIZE, SIZE);
+      ctx.strokeStyle = '#2d2d2d';
+      ctx.lineWidth = 1;
+
+      ctx.beginPath();
+      for (let i = 0; i <= N; i++) {
+        const p = i * CELL;
+        ctx.moveTo(p, 0); ctx.lineTo(p, SIZE);
+        ctx.moveTo(0, p); ctx.lineTo(SIZE, p);
+      }
+      ctx.stroke();
+
+      if (hoverCell) {
+        ctx.fillStyle = '#' + ID.slice(0, 6);
+        ctx.globalAlpha = 0.4;
+        ctx.fillRect(hoverCell.c * CELL + 1, hoverCell.r * CELL + 1, CELL - 2, CELL - 2);
+        ctx.globalAlpha = 1.0;
+      }
+
+      ctx.font = '14px sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+
+      for (const [r, c, v] of moves) {
+        ctx.fillStyle = '#' + v.slice(0, 6);
+        ctx.fillRect(c * CELL + 1, r * CELL + 1, CELL - 2, CELL - 2);
+
+        const text = v.slice(6);
+        if (text) {
+          ctx.fillStyle = '#fff';
+          ctx.fillText(text, c * CELL + CELL / 2, r * CELL + CELL / 2, CELL - 2);
+        }
+      }
+    }
+
+    function recordMove(m) {
+      if (!m) return;
+      if (moves.some(x => x[0] === m[0] && x[1] === m[1])) m[2] += ' ERR';
+      moves.push(m);
+    }
+
+    const getPos = e => {
+      const r = cvs.getBoundingClientRect();
+      return { c: Math.floor((e.clientX - r.left) / CELL), r: Math.floor((e.clientY - r.top) / CELL) };
+    };
+
+    cvs.onmousemove = e => { hoverCell = getPos(e); draw(); };
+    cvs.onmouseleave = () => { hoverCell = null; draw(); };
+
+    cvs.onclick = e => {
+      const { r, c } = getPos(e);
+      if (r < 0 || r >= N || c < 0 || c >= N || moves.some(x => x[0] === r && x[1] === c)) return;
+
+      const move = [r, c, ID];
+      recordMove(move);
+      draw();
+
+      const payload = JSON.stringify(move);
+      dcs.forEach(dc => dc.readyState === 'open' && dc.send(payload));
+      
+      fetch('/cgi-bin/api.sh?action=post_move', { method: 'POST', body: payload })
+        .catch(err => alert('Post Move Error: ' + err));
+    };
+
+    const loadBoard = () => fetch('/cgi-bin/api.sh?action=get_moves')
+      .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
+      .then(mList => { moves.length = 0; mList.forEach(recordMove); draw(); })
+      .catch(err => console.warn('Load Board Error: ' + err));
+
+    const startVoice = async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        for (const target in pcs) {
+          const pc = pcs[target];
+          stream.getTracks().forEach(t => pc.addTrack(t, stream));
+          pc.createOffer()
+            .then(o => pc.setLocalDescription(o))
+            .then(() => sendSig(target, { sdp: pc.localDescription }))
+            .catch(err => alert(`Voice Renegotiation Error (${target}): ` + err));
+        }
+      } catch (err) {
+        alert('Voice/Microphone Access Error: ' + err);
+      }
+    };
+
+    function initPC(target, isInitiator) {
+      if (!target || pcs[target]) return pcs[target];
+      const pc = pcs[target] = new RTCPeerConnection();
+
+      if (stream) stream.getTracks().forEach(t => pc.addTrack(t, stream));
+      pc.ontrack = e => {
+        let a = document.getElementById(`audio_${target}`) || document.createElement('audio');
+        a.id = `audio_${target}`; a.autoplay = true;
+        if (!a.parentNode) audios.appendChild(a);
+        a.srcObject = e.streams[0];
+      };
+      pc.onicecandidate = e => e.candidate && sendSig(target, { candidate: e.candidate });
+
+      const attachDC = dc => {
+        dc.onmessage = e => {
+          try {
+            recordMove(JSON.parse(e.data));
+            draw();
+          } catch (err) {
+            alert('DataChannel Message Error: ' + err);
+          }
+        };
+        dcs.push(dc);
+      };
+
+      if (isInitiator) {
+        attachDC(pc.createDataChannel('game'));
+        pc.createOffer().then(o => pc.setLocalDescription(o)).then(() => sendSig(target, { sdp: pc.localDescription }));
+      } else {
+        pc.ondatachannel = e => attachDC(e.channel);
+      }
+      return pc;
+    }
+
+    const sendSig = (to, body) => fetch(`/cgi-bin/api.sh?action=send_signal&peer=${to}`, { method: 'POST', body: JSON.stringify({ from: ID, ...body }) })
+      .catch(err => console.warn('Send Signal Error: ' + err));
+
+    setInterval(async () => {
+      try {
+        sendSig(ID, { ping: true });
+
+        const sRes = await fetch(`/cgi-bin/api.sh?action=get_signals&peer=${ID}`);
+        if (sRes.ok) {
+          const list = await sRes.json();
+          for (const s of list) {
+            if (!s.from || s.from === ID) continue;
+            const pc = pcs[s.from] || initPC(s.from, false);
+            if (s.sdp) {
+              await pc.setRemoteDescription(s.sdp).catch(err => console.warn('SDP Remote Error: ' + err));
+              if (s.sdp.type === 'offer') {
+                await pc.setLocalDescription(await pc.createAnswer()).catch(err => console.warn('SDP Answer Error: ' + err));
+                sendSig(s.from, { sdp: pc.localDescription });
+              }
+            } else if (s.candidate) {
+              if (pc.remoteDescription) {
+                await pc.addIceCandidate(s.candidate).catch(err => console.warn('ICE add error:', err));
+              }
+            }
+          }
+        }
+
+        const pRes = await fetch('/cgi-bin/api.sh?action=get_peers');
+        if (pRes.ok) {
+          const peerList = await pRes.json();
+          for (const target of peerList) {
+            if (target !== ID && !pcs[target] && ID < target) initPC(target, true);
+          }
+        }
+      } catch (err) {
+        console.warn('Signaling Loop Error: ' + err);
+      }
+    }, 1500);
+
+    draw();
+    loadBoard();
+  </script>
+</body>
+</html>
