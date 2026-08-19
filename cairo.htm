@@ -9,13 +9,25 @@
   </style>
 </head>
 <body>
-<canvas id="myCanvas" width="600" height="600"></canvas>
-<p>• <strong>Hover</strong> near the middle of a long edge to preview snap options.<br>
-• Press <strong>Spacebar</strong> to toggle between the two placement options.<br>
-• <strong>Left Click</strong> to place the previewed tile.<br>
-• Press <strong>Backspace</strong> to undo placements.</p>
+<canvas id="myCanvas" width="680" height="680"></canvas>
+<div class="controls">
+  <button onclick="doToggle()">Rotate (space)</button>
+  <button onclick="doPlace()">Place Tile (click)</button>
+  <button onclick="undo()">Undo (backspace)</button>
+  <button onclick="doReset()">Reset (ctrl-R)</button>
+  <button onclick="doSync()">Sync (ctrl-S)</button>
+  <button onclick="doDebug()">Debug (ctrl-D)</button>
+</div>
 <script>
-
+/*
+<p><strong>Hover</strong> near the middle of <strong>long pentagon edges</strong> (the shorter pentagon edge can not be used) to preview snap options<br>
+<strong>Spacebar</strong> to toggle between the two placement options<br>
+<strong>Left Click</strong> to place the previewed tile<br>
+<strong>Backspace</strong> to Undo placements<br>
+<strong>Ctrl-R</strong> to Reset (removes all tiles and places one tile at origin)<br>
+<strong>Ctrl-S</strong> to Sync<br>
+<strong>Ctrl-D</strong> to Debug</p>
+*/
 const canvas = document.getElementById('myCanvas');
 const ctx = canvas.getContext('2d');
 
@@ -32,13 +44,14 @@ const baseVertices = [
   [-2,  2,     0, 0]
 ];
 
-// Master list of edge midpoints: [cx, dx, cy, dy, angle_idx, paired]
-const mids = [
-  [ 2, -1,     1, 0,      2,      0],
-  [ 1,  0,     2, 1,      5,      0],
-  [-1,  0,     2, 1,      7,      0],
-  [-2,  1,     1, 0,     10,      0]
+const mids = [  //Master list of edge midpoints: [cx, dx, cy, dy, angle_idx, player]
+  [ 2, -1,     1, 0,      2,      "#94a3b8", ""],
+  [ 1,  0,     2, 1,      5,      "#94a3b8", ""],
+  [-1,  0,     2, 1,      7,      "#94a3b8", ""],
+  [-2,  1,     1, 0,     10,      "#94a3b8", ""]
 ];
+
+const blockedMids = [0,0,0,0];  //Indicator of whether the edge has been paired (or blocked from getting more tiles on this edge in some way)
 
 //shift the first edge midpoint to be at origin to make setTransform easier during draw:
 const shift = [-2, 1, -1, 0];
@@ -79,14 +92,39 @@ function transformTuple(pt, mirror, k) {
 }
 function addTuples(t1, t2) { return [t1[0] + t2[0], t1[1] + t2[1], t1[2] + t2[2], t1[3] + t2[3]]; }
 function subTuples(t1, t2) { return [t1[0] - t2[0], t1[1] - t2[1], t1[2] - t2[2], t1[3] - t2[3]]; }
-function toFP(t) { return [sqrt3 * t[0] + t[1], sqrt3 * t[2] + t[3]]; }
 
 // Build reusable Path2D from baseVertices
-const pentagonPath = new Path2D();
-baseVertices.map(toFP).forEach(([x, y], i) => {
-  i === 0 ? pentagonPath.moveTo(x, y) : pentagonPath.lineTo(x, y);
-});
+const pentagonPath = new Path2D();            pentagonPath.moveTo(sqrt3 * baseVertices[0][0] + baseVertices[0][1], sqrt3 * baseVertices[0][2] + baseVertices[0][3]);
+for (let i = 1; i < baseVertices.length; i++) pentagonPath.lineTo(sqrt3 * baseVertices[i][0] + baseVertices[i][1], sqrt3 * baseVertices[i][2] + baseVertices[i][3]);
 pentagonPath.closePath();
+
+const pentagonCenter = baseVertices.reduce((acc, v) => [acc[0] + (sqrt3 * v[0] + v[1]) / 5, acc[1] + (sqrt3 * v[2] + v[3]) / 5], [0, 0]);
+
+const SOME_COLORS = [
+  "#94a3b8", // Player 0 (slate)
+  "#f87171", // Player 1 (red)
+  "#60a5fa", // Player 2 (blue)
+  "#34d399", // Player 3 (green)
+  "#fbbf24", // Player 4 (amber)
+  "#a78bfa", // Player 5 (purple)
+  "#f472b6", // Player 6 (pink)
+  "#fb923c", // Player 7 (orange)
+  "#2dd4bf", // Player 8 (teal)
+  "#e879f9"  // Player 9 (fuchsia)
+];
+const urlParams = new URLSearchParams(window.location.search);
+const paramC = urlParams.get('c');
+let activeColor = SOME_COLORS[0];
+if (paramC !== null) {
+  if (paramC.length === 1) {
+    activeColor = SOME_COLORS[paramC] || SOME_COLORS[0];
+  } else {
+    activeColor = paramC.startsWith('#') ? paramC : '#' + paramC;
+  }
+}
+
+const activeText = urlParams.get('t') ?? '';
+
 
 function getCandidates(targetIdx) {
   const Et = mids[targetIdx];
@@ -99,19 +137,231 @@ function getCandidates(targetIdx) {
 
     const Ai = mids[i][4];
     const m = 0;
-    const k = (At + 6 - Ai + 12) % 12;
+    const k = (At - Ai + 18) % 12;
     const candMidI = transformTuple(mids[i].slice(0, 4), m, k);
     const translation = subTuples(targetM, candMidI);
 
-    const cVerts = baseVertices.map(v => addTuples(transformTuple(v, m, k), translation));
     const cMids = mids.slice(0, 4).map(bm => {
       const transformedM = addTuples(transformTuple(bm.slice(0, 4), m, k), translation);
       const nAngle = (bm[4] + k) % 12;
-      return [...transformedM, nAngle, 0];});
+      return [...transformedM, nAngle, activeColor, activeText];});
 
-    candidates.push({ verts: cVerts, mids: cMids });}
+    candidates.push({ mids: cMids });}
   return candidates;
 }
+
+//****"get period of first actor and once enough moves are made to know this, just prevent json send until it's your turn"
+//"until then, send once without json and then right away again with json if not stale"
+
+function setMidTransform(m) {
+  const [ca, cb, sa, sb] = TRIG30[(m[4] + 10) % 12];   //10%12 is effectively subtracting of mids[0][0]
+  const cos = (ca * sqrt3 + cb) / 2;
+  const sin = (sa * sqrt3 + sb) / 2;
+
+  const a =  drawScale * cos;
+  const b =  drawScale * sin;
+  const c = -drawScale * sin;
+  const d =  drawScale * cos;
+  const e =  drawScale * (sqrt3 * m[0] + m[1]) + drawWby2;
+  const f =  drawScale * (sqrt3 * m[2] + m[3]) + drawHby2;
+
+  ctx.setTransform(a, b, c, d, e, f);
+}
+
+function draw() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  for (let i = 0; i < mids.length; i += 4) {
+    const m = mids[i];
+    setMidTransform(m);
+
+    ctx.fillStyle = typeof m[5] === 'string' ? m[5] : (SOME_COLORS[m[5]] || SOME_COLORS[0]);
+    //ctx.fillStyle = "#94a3b8";
+    //ctx.fillStyle = m[5];
+    ctx.fill(pentagonPath);
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = 0.5 / drawScale;
+    ctx.stroke(pentagonPath);
+
+    // Draw letter at pentagon center
+    ctx.fillStyle = '#1e293b';
+    ctx.font = 'bold 2.0px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(m[6] ?? "", pentagonCenter[0], pentagonCenter[1]);
+
+  }
+
+  if (hoveredMidIdx !== -1) {
+    const candidates = getCandidates(hoveredMidIdx);
+    if (candidates.length > 0) {
+      const cand = candidates[currentOptionIdx % candidates.length];
+      setMidTransform(cand.mids[0]);
+
+    ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
+    ctx.fill(pentagonPath);
+    ctx.strokeStyle = '#2563eb';
+    ctx.lineWidth = 2.0 / drawScale;
+    ctx.stroke(pentagonPath);
+    }
+  }
+}
+
+
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left - drawWby2) / drawScale;
+  const my = (e.clientY - rect.top  - drawHby2) / drawScale;
+  let minDist = Infinity;
+  let nearest = -1;
+
+  for (let i = 0; i < mids.length; i++) {if (blockedMids[i] === 1) continue;
+    const d = Math.hypot(mx - sqrt3 * mids[i][0] - mids[i][1], my - sqrt3 * mids[i][2] - mids[i][3]);
+    if (d < minDist) {minDist = d; nearest = i;}}
+
+  if (minDist < 6) {
+    if (hoveredMidIdx !== nearest) {
+      hoveredMidIdx = nearest;
+      currentOptionIdx = 0;
+      draw();}
+    //else <--this line is the only differing line between mousemove (really designed for laptops with mouse/touchpad) and pointerdown listeners 
+  }
+  //else {hoveredMidIdx = -1; draw();}
+});
+
+//Only for Tablet/Phone touch support: Tapping an edge sets target directly without intermediate hover jumps:
+canvas.addEventListener('pointerdown', e => {if (e.pointerType === 'touch') {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left - drawWby2) / drawScale;
+  const my = (e.clientY - rect.top  - drawHby2) / drawScale;
+  let minDist = Infinity;
+  let nearest = -1;
+
+  for (let i = 0; i < mids.length; i++) {if (blockedMids[i] === 1) continue;
+    const d = Math.hypot(mx - sqrt3 * mids[i][0] - mids[i][1], my - sqrt3 * mids[i][2] - mids[i][3]);
+    if (d < minDist) {minDist = d; nearest = i;}}
+
+  if (minDist < 6) {
+    if (hoveredMidIdx !== nearest) {
+      hoveredMidIdx = nearest;
+      currentOptionIdx = 0;
+      draw();}
+    else {currentOptionIdx = (currentOptionIdx + 1) % getCandidates(nearest).length; draw();} //Tapping the SAME edge again toggles placement option on touch
+  }
+  //else {hoveredMidIdx = -1; draw();}
+}});
+
+
+let racing = 5; //Highest racing (20) does not read or write to server at all, others always update local mids array with served state.  As for writing: high racing (15) posts move right away, medium racing (10) never posts, low racing (5) posts if non-stale read is confirmed.
+
+async function doPlace() {
+  if (hoveredMidIdx === -1) return;
+  const candidates = getCandidates(hoveredMidIdx);
+  if (candidates.length === 0) return;
+  const selected = candidates[currentOptionIdx % candidates.length];
+  let staleIdx = -1;
+
+if (racing < 20) {
+  //const payloadText = "RESET by " + activeColor + " " + activeText + '\n' + JSON.stringify(selected.mids) + '\n';
+  const payloadText = racing < 11 ?    'read only'    :    JSON.stringify(selected.mids) + '\n';
+
+  let bodyText = '';
+  try {
+    const response = await fetch('http://192.168.1.1:37228/', {
+    //const response = await fetch(window.location.protocol + '//' + window.location.hostname + ':37228/', {
+      method: 'POST',
+      cache: 'no-store',
+      //mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain' },
+      body: payloadText
+    });
+    //console.log(`--- STATUS ---`);
+    //console.log(`HTTP ${response.status} ${response.statusText}`);
+    //console.log(`--- HEADERS ---`);
+    //for (const [key, value] of response.headers.entries()) {
+    //  console.log(`${key}: ${value}`);
+    //}
+    bodyText = await response.text();
+  } catch (err) {alert('ERROR: nc not running on router? ' + err); return;}
+
+  //console.log(`--- BODY ---`);
+  //console.log(bodyText);
+
+  let currIdx = 0;
+  try {
+    bodyText.split('\n')
+      .filter(line => line.trim().startsWith('[['))
+      .forEach(line => { const rows = JSON.parse(line);
+        for (const row of rows) {
+          if (staleIdx < 0) {if (currIdx >= mids.length || !row.every((val, colIdx) => val === mids[currIdx][colIdx])) {staleIdx = currIdx;}}
+          if (currIdx < mids.length) mids[currIdx] = row;
+          else mids.push(row);
+          currIdx++;
+        }});
+  } catch (err) {alert('ERROR: impossible JSON parse error: ' + err); return;}
+
+  if (currIdx  <  4) {alert('ERROR: empty state file on router? ' + currIdx); return;}
+  if (staleIdx <  0 && mids.length !== currIdx) staleIdx = currIdx;
+  if (mids.length > currIdx) mids.length = currIdx;
+}
+
+  if (staleIdx >= 0) {alert('Ignored Click: stale tiling (at index ' + staleIdx + ') will now be updated');
+    //recalculate all blockedMids by checking for pairings:
+    blockedMids.length = mids.length;
+    blockedMids.fill(0);
+    for (let i = 0;     i < mids.length; i++) {
+    for (let j = i + 1; j < mids.length; j++) {
+      if (mids[i][0] === mids[j][0] && mids[i][1] === mids[j][1] && mids[i][2] === mids[j][2] && mids[i][3] === mids[j][3]) {
+          if ((mids[i][4] - mids[j][4] + 12) % 12 !== 6) alert('ERROR: tile edges cross at indices ' + i + ' ' + j);
+          else if (blockedMids[i] !== 0 || blockedMids[j] !== 0) alert('ERROR: three tile edges at indices ' + i + ' ' + j);
+          blockedMids[i] = 1;
+          blockedMids[j] = 1;
+    }}}
+  }
+  else {
+    if (racing <  6) {
+    const payloadText = JSON.stringify(selected.mids) + '\n';
+    const response = await fetch('http://192.168.1.1:37228/', {
+    //const response = await fetch(window.location.protocol + '//' + window.location.hostname + ':37228/', {
+      method: 'POST',
+      cache: 'no-store',
+      //mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain' },
+      body: payloadText
+    });
+    }
+
+    const pairedIndices = [];
+    const newBlocked = new Array(selected.mids.length).fill(0);
+    selected.mids.forEach((cM, cIdx) => {
+      for (let i = 0; i < mids.length; i++) {
+        const existing = mids[i];
+        if (existing[0] === cM[0] && existing[1] === cM[1] &&
+            existing[2] === cM[2] && existing[3] === cM[3]) {
+          if (blockedMids[i] === 0) {
+            blockedMids[i] = 1;
+            pairedIndices.push(i);
+          }
+          newBlocked[cIdx] = 1;
+          break;
+        }
+      }
+    });
+
+    undoStack.push({
+      pairedIndices: pairedIndices,
+      numNewMids: selected.mids.length
+    });
+    mids.push(...selected.mids);
+    blockedMids.push(...newBlocked);
+  }
+  hoveredMidIdx = -1; draw();}
+
+canvas.addEventListener('click', doPlace);
+
+function doToggle() {if (hoveredMidIdx !== -1) {const candidates = getCandidates(hoveredMidIdx);
+    if (candidates.length > 0) {currentOptionIdx = (currentOptionIdx + 1) % candidates.length; draw();}}}
 
 function undo() {
   if (undoStack.length === 0) return;
@@ -119,181 +369,65 @@ function undo() {
   mids.length -= lastAction.numNewMids;
   lastAction.pairedIndices.forEach(idx => {
     if (idx < mids.length) {
-      mids[idx][5] = 0;
+      blockedMids[idx] = 0;
     }});
-  hoveredMidIdx = -1;
-  draw();
-}
+  hoveredMidIdx = -1; draw();}
 
-function draw() {
-  ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.restore();
-  ctx.save();
-
-  for (let i = 0; i < mids.length; i += 4) {
-    const m = mids[i];
-    const [tx, ty] = toFP(m);
-
-    const [ca, cb, sa, sb] = TRIG30[(m[4] + 10) % 12];   //10%12 is effectively subtracting of mids[0][0]
-    const cos = (ca * sqrt3 + cb) / 2;
-    const sin = (sa * sqrt3 + sb) / 2;
-
-    const a =  drawScale * cos;
-    const b =  drawScale * sin;
-    const c = -drawScale * sin;
-    const d =  drawScale * cos;
-    const e =  drawScale * tx   + drawWby2;
-    const f =  drawScale * ty   + drawHby2;
-
-    ctx.setTransform(a, b, c, d, e, f);
-    ctx.fillStyle = '#94a3b8';
-    ctx.fill(pentagonPath);
-    ctx.strokeStyle = '#1e293b';
-    ctx.lineWidth = 0.5 / drawScale;
-    ctx.stroke(pentagonPath);
-  }
-
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.translate(drawWby2, drawHby2);
-  ctx.scale(drawScale, drawScale);
-
-  // Highlight candidate preview if hovering
-  if (hoveredMidIdx !== -1) {
-    const candidates = getCandidates(hoveredMidIdx);
-    if (candidates.length > 0) {
-      const cand = candidates[currentOptionIdx % candidates.length];
-      const fps = cand.verts.map(toFP);
-      ctx.beginPath();
-      ctx.moveTo(...fps[0]);
-      for (let i = 1; i < fps.length; i++) ctx.lineTo(...fps[i]);
-      ctx.closePath();
-      ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
-      ctx.fill();
-      ctx.strokeStyle = '#2563eb';
-      ctx.lineWidth = 0.75;
-      ctx.stroke();
-    }
-  }
-
-  // Draw midpoint indicators
-  mids.forEach((m, idx) => {
-    if (m[5] === 0) {
-      const fp = toFP(m);
-      ctx.fillStyle = (idx === hoveredMidIdx) ? '#ef4444' : '#3b82f6';
-      ctx.beginPath();
-      ctx.arc(fp[0], fp[1], (idx === hoveredMidIdx) ? 0.8 : 0.4, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  });
-
-  ctx.restore();
-}
-
-canvas.addEventListener('mousemove', e => {
-  const rect = canvas.getBoundingClientRect();
-  const mx = (e.clientX - rect.left - drawWby2) / drawScale;
-  const my = (e.clientY - rect.top  - drawHby2) / drawScale;
-
-  let minDist = Infinity;
-  let nearest = -1;
-
-  for (let i = 0; i < mids.length; i++) {
-    if (mids[i][5] === 1) continue;
-    const fp = toFP(mids[i]);
-    const d = Math.hypot(mx - fp[0], my - fp[1]);
-    if (d < minDist) {
-      minDist = d;
-      nearest = i;
-    }
-  }
-
-  if (minDist < 6) {
-    if (hoveredMidIdx !== nearest) {
-      hoveredMidIdx = nearest;
-      currentOptionIdx = 0;
-    }
-  } else {
-    hoveredMidIdx = -1;
-  }
-  draw();
-});
-
-canvas.addEventListener('click', async () => {
-  if (hoveredMidIdx === -1) return;
-
-  const candidates = getCandidates(hoveredMidIdx);
-  if (candidates.length === 0) return;
-
-  const selected = candidates[currentOptionIdx % candidates.length];
-
-  const pairedIndices = [hoveredMidIdx];
-  mids[hoveredMidIdx][5] = 1;
-
-  selected.mids.forEach(cM => {
-    for (let i = 0; i < mids.length; i++) {
-      let existing = mids[i];
-      if (existing[0] === cM[0] && existing[1] === cM[1] &&
-          existing[2] === cM[2] && existing[3] === cM[3]) {
-        if (existing[5] === 0) {
-          existing[5] = 1;
-          pairedIndices.push(i);
-        }
-        cM[5] = 1;
-        break;
-      }
-    }
-  });
-
-  undoStack.push({
-    pairedIndices: pairedIndices,
-    numNewMids: selected.mids.length
-  });
-
-  selected.mids.forEach(cM => mids.push(cM));
-
-  const payloadText = JSON.stringify(selected.mids) + '\n';
-  fetch('http://192.168.1.1:8080/', {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain' },
-    body: payloadText
-  });
-
-  hoveredMidIdx = -1;
-  draw();
-});
-
-window.addEventListener('keydown', async e => {
-  if (e.code === 'Space') {
-    e.preventDefault();
-    if (hoveredMidIdx !== -1) {
-      const candidates = getCandidates(hoveredMidIdx);
-      if (candidates.length > 0) {
-        currentOptionIdx = (currentOptionIdx + 1) % candidates.length;
-        draw();}}
-  } else if (e.code === 'KeyS') {
-    e.preventDefault();
-    const res = await fetch('state.txt', { cache: 'no-cache' });
-    const text = await res.text();
-    //mids = [];
+async function doReset() {
     mids.length = 4;
-    text.split('\n')
-      .filter(line => line.startsWith('[['))
-      .forEach(line => { const rows = JSON.parse(line); mids.push(...rows); });
+    for (let i = 0; i < mids.length; i++) {mids[i][5] = activeColor; mids[i][6] = activeText;}
+    blockedMids.length = 0;
+    blockedMids.push(0, 0, 0, 0);
+    if (hoveredMidIdx >= 4) hoveredMidIdx = -1;
     draw();
-  } else if (e.code === 'KeyU' || e.code === 'Backspace') {
-    e.preventDefault();
-    undo();
-  } else if (e.code === 'KeyR') {
-    e.preventDefault();
-    await fetch('cgi-bin/reset.cgi', {
+    const payloadText = "RESET by " + activeColor + " " + activeText + '\n' + JSON.stringify(mids) + '\n';
+
+//****for some reason code below sometimes does not reset, like it can't all go too fast!!!
+////let bodyText = '';
+////try {
+    const response = await fetch('http://192.168.1.1:37228/', {
+    //const response = await fetch(window.location.protocol + '//' + window.location.hostname + ':37228/', {
       method: 'POST',
+      cache: 'no-store',
+      //mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain' },
+      body: payloadText
     });
-  }
-});
+
+    ///console.log(`--- STATUS ---`);
+    ///console.log(`HTTP ${response.status} ${response.statusText}`);
+    ///console.log(`--- HEADERS ---`);
+    ///for (const [key, value] of response.headers.entries()) {
+    ///  console.log(`${key}: ${value}`);
+    ///}
+    //bodyText = await response.text();
+////  } catch (err) {alert('RESET ERROR: nc not running on router? ' + err); return;}
+
+  ///console.log(`--- BODY ---`);
+  //console.log(bodyText);
+}
+
+async function doSync() {
+  const response = await fetch('http://192.168.1.1/state.txt', { cache: 'no-store' });
+  //const response = await fetch(window.location.protocol + '//' + window.location.hostname + '/state.txt', { cache: 'no-store' });
+  const text = await response.text();
+  mids.length = 0;
+  text.split('\n')
+    .filter(line => line.trim().startsWith('[['))
+    .forEach(line => { const rows = JSON.parse(line); mids.push(...rows); });
+  if (hoveredMidIdx >= mids.length) hoveredMidIdx = -1; draw();}
+
+function doDebug() {racing += 5; if (racing > 20) racing = 5; alert('DEBUG: racing=' + racing);}
+
+window.addEventListener('keydown', e => {
+       if (e.code === 'Space') {e.preventDefault(); doToggle();}
+  else if (e.code === 'KeyS')  {e.preventDefault(); doSync();}
+  else if (e.code === 'KeyU' || e.code === 'Backspace')   {e.preventDefault(); undo();}
+  else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyD') {e.preventDefault(); doDebug();}
+  else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyR') {e.preventDefault(); doReset();}});
 
 draw();
 </script>
 </body>
+
 </html>
