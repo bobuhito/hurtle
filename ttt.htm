@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>DD-WRT Canvas P2P Game + Voice</title>
+  <title>TTT</title>
   <style>
     body { font-family: sans-serif; background: #121212; color: #eee; text-align: center; margin: 0; padding: 15px; }
     canvas { background: #1a1a1a; border: 1px solid #444; cursor: crosshair; margin-top: 10px; }
@@ -11,23 +11,45 @@
   </style>
 </head>
 <body>
-  <h2>Tic-Tac-Toe + Voice Room</h2>
-  <label>Color: <input type="color" id="myColor" value="#3498db" onchange="updateID()"></label>
-  <input id="myName" value="Alice" placeholder="Name" style="width:70px" oninput="updateID()">
+  <h2>Tic-Tac-Toe Voice Room</h2>
+  <input type="color" id="myColor" value="#3498db" onchange="updateID()">
+  <input id="myName" value="Alice" style="width:30px" oninput="updateID()">
   <button onclick="startVoice()">🎙️ Mic On</button>
   <button onclick="loadBoard()">🔄 Sync Board</button>
   <br>
   <canvas id="cvs" width="700" height="700"></canvas>
   <div id="audios"></div>
-
   <script>
+    const SOME_COLORS = [
+      "#94a3b8", // Player 0 (slate)
+      "#f87171", // Player 1 (red)
+      "#60a5fa", // Player 2 (blue)
+      "#34d399", // Player 3 (green)
+      "#fbbf24", // Player 4 (amber)
+      "#a78bfa", // Player 5 (purple)
+      "#f472b6", // Player 6 (pink)
+      "#fb923c", // Player 7 (orange)
+      "#2dd4bf", // Player 8 (teal)
+      "#e879f9"  // Player 9 (fuchsia)
+    ];
+    const urlParams = new URLSearchParams(window.location.search);
+    const paramC = urlParams.get('c');
+    let activeColor = SOME_COLORS[0];
+    if (paramC !== null) {
+      if (paramC.length === 1) activeColor = SOME_COLORS[paramC] || SOME_COLORS[0];
+      else                     activeColor = paramC.startsWith('#') ? paramC : '#' + paramC;
+    }
+    const colorInput = document.getElementById('myColor');
+    colorInput.value = activeColor;
+    //colorInput.value = '#' + Math.floor(Math.random() * 0xFFFFFF).toString(16).padStart(6, '0');
+    const activeText = urlParams.get('t') ?? '';
+    const nameInput = document.getElementById('myName');
+    nameInput.value = activeText;
+    //nameInput.value = String.fromCharCode(65 + Math.floor(Math.random() * 26));
+
     const N = 10, SIZE = 700, CELL = SIZE / N;
     let ID;
-
-    myColor.value = '#' + Math.floor(Math.random() * 0xFFFFFF).toString(16).padStart(6, '0');
-    myName.value = String.fromCharCode(65 + Math.floor(Math.random() * 26));
-
-    const updateID = () => { ID = myColor.value.slice(1) + myName.value.replace(/[^a-zA-Z0-9]/g, ''); };
+    function updateID() {ID = colorInput.value.slice(1) + nameInput.value.replace(/[^a-zA-Z0-9]/g, '');}
     updateID();
 
     const pcs = {}, dcs = [], moves = [], ctx = cvs.getContext('2d');
@@ -93,11 +115,11 @@
       const payload = JSON.stringify(move);
       dcs.forEach(dc => dc.readyState === 'open' && dc.send(payload));
       
-      fetch('/cgi-bin/api.sh?action=post_move', { method: 'POST', body: payload })
+      fetch('/cgi-bin/api.sh?task=post_move', { method: 'POST', body: payload })
         .catch(err => alert('Post Move Error: ' + err));
     };
 
-    const loadBoard = () => fetch('/cgi-bin/api.sh?action=get_moves')
+    const loadBoard = () => fetch('/cgi-bin/api.sh?task=get_moves')
       .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
       .then(mList => { moves.length = 0; mList.forEach(recordMove); draw(); })
       .catch(err => console.warn('Load Board Error: ' + err));
@@ -105,29 +127,28 @@
     const startVoice = async () => {
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const audioTrack = stream.getAudioTracks()[0];
         for (const target in pcs) {
           const pc = pcs[target];
-          stream.getTracks().forEach(t => pc.addTrack(t, stream));
-          pc.createOffer()
-            .then(o => pc.setLocalDescription(o))
-            .then(() => sendSig(target, { sdp: pc.localDescription }))
-            .catch(err => alert(`Voice Renegotiation Error (${target}): ` + err));
-        }
-      } catch (err) {
-        alert('Voice/Microphone Access Error: ' + err);
-      }
-    };
+          const audioTransceiver = pc.getTransceivers().find(t => t.receiver.track.kind === 'audio');
+          if (audioTransceiver && audioTransceiver.sender) audioTransceiver.sender.replaceTrack(audioTrack);}
+      } catch (err) {alert('Voice/Microphone Access Error: ' + err);}};
 
     function initPC(target, isInitiator) {
       if (!target || pcs[target]) return pcs[target];
       const pc = pcs[target] = new RTCPeerConnection();
 
-      if (stream) stream.getTracks().forEach(t => pc.addTrack(t, stream));
+      // Pre-allocate audio channel in initial SDP (even if mic is off)
+      const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
+      if (stream && stream.getAudioTracks()[0]) {
+        audioTransceiver.sender.replaceTrack(stream.getAudioTracks()[0]);
+      }
+
       pc.ontrack = e => {
         let a = document.getElementById(`audio_${target}`) || document.createElement('audio');
         a.id = `audio_${target}`; a.autoplay = true;
         if (!a.parentNode) audios.appendChild(a);
-        a.srcObject = e.streams[0];
+        a.srcObject = e.streams[0] || new MediaStream([e.track]);
       };
       pc.onicecandidate = e => e.candidate && sendSig(target, { candidate: e.candidate });
 
@@ -145,51 +166,50 @@
 
       if (isInitiator) {
         attachDC(pc.createDataChannel('game'));
-        pc.createOffer().then(o => pc.setLocalDescription(o)).then(() => sendSig(target, { sdp: pc.localDescription }));
+        pc.createOffer().then(o => pc.setLocalDescription(o)).then(() => sendSig(target, { sdp: pc.localDescription })).catch(err => console.warn('Initial offer error:' + err));
       } else {
         pc.ondatachannel = e => attachDC(e.channel);
       }
       return pc;
     }
 
-    const sendSig = (to, body) => fetch(`/cgi-bin/api.sh?action=send_signal&peer=${to}`, { method: 'POST', body: JSON.stringify({ from: ID, ...body }) })
+    const sendSig = (to, body) => fetch(`/cgi-bin/api.sh?task=send_signal&peer=${to}`, { method: 'POST', body: JSON.stringify({ from: ID, ...body }) })
       .catch(err => console.warn('Send Signal Error: ' + err));
 
     setInterval(async () => {
       try {
         sendSig(ID, { ping: true });
-
-        const sRes = await fetch(`/cgi-bin/api.sh?action=get_signals&peer=${ID}`);
+        const sRes = await fetch(`/cgi-bin/api.sh?task=get_signals&peer=${ID}`);
         if (sRes.ok) {
           const list = await sRes.json();
           for (const s of list) {
             if (!s.from || s.from === ID) continue;
             const pc = pcs[s.from] || initPC(s.from, false);
+            if (!pc.iceQueue) pc.iceQueue = [];
             if (s.sdp) {
               await pc.setRemoteDescription(s.sdp).catch(err => console.warn('SDP Remote Error: ' + err));
               if (s.sdp.type === 'offer') {
                 await pc.setLocalDescription(await pc.createAnswer()).catch(err => console.warn('SDP Answer Error: ' + err));
-                sendSig(s.from, { sdp: pc.localDescription });
-              }
-            } else if (s.candidate) {
-              if (pc.remoteDescription) {
-                await pc.addIceCandidate(s.candidate).catch(err => console.warn('ICE add error:', err));
-              }
-            }
-          }
-        }
-
-        const pRes = await fetch('/cgi-bin/api.sh?action=get_peers');
+                sendSig(s.from, { sdp: pc.localDescription });}}
+            if (pc.remoteDescription) {while (pc.iceQueue.length) {await pc.addIceCandidate(pc.iceQueue.shift()).catch(err => console.warn('ICE add error:', err));}}
+            if (s.candidate) {
+              //if (pc.remoteDescription && pc.remoteDescription.type) {await pc.addIceCandidate(s.candidate).catch(err => console.warn('ICE add error: ' + err));}
+              if (pc.remoteDescription) {await pc.addIceCandidate(s.candidate).catch(err => console.warn('ICE add error: ' + err));}
+              else pc.iceQueue.push(s.candidate);}
+        }}
+        //const pRes = await fetch('/cgi-bin/api.sh?task=get_peers');  //OLD METHOD: returns a string which is an array of strings like ["bob","alice","134"]
+        //if (pRes.ok) {
+        //  const peerList = await pRes.json();
+        //  for (const target of peerList) {
+        //    if (target !== ID && !pcs[target] && ID < target) initPC(target, true); }}
+        const pRes = await fetch('/cgi-bin/api.sh?task=get_peers');  //NEW METHOD: returns a string which is comma-separated elements like bob,alice,134, (has ending comma; unique "empty list" response adds asterisk: *,)
         if (pRes.ok) {
-          const peerList = await pRes.json();
-          for (const target of peerList) {
-            if (target !== ID && !pcs[target] && ID < target) initPC(target, true);
-          }
-        }
-      } catch (err) {
-        console.warn('Signaling Loop Error: ' + err);
-      }
-    }, 1500);
+          const peers = (await pRes.text()).split(','); if (peers.length < 3) console.warn('just me in peers (' + peers[0] + ')');
+          const last = peers.pop(); if (last !== '') alert('ERROR: peer name (' + last + ') without trailing comma');
+          for (const target of peers) {
+            if (target.length < 6) alert('ERROR: peer name (' + target + ') should start with 6 color characters');
+            else if (target !== ID && !pcs[target] && ID < target) initPC(target, true); }}
+      } catch (err) {console.warn('Signaling Loop Error: ' + err);}}, 1500);
 
     draw();
     loadBoard();
