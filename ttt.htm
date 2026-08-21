@@ -34,14 +34,14 @@
     ];
     const urlParams = new URLSearchParams(window.location.search);
     const paramC = urlParams.get('c');
-    let activeColor = SOME_COLORS[0];
+    let activeColor = '#' + Math.floor(Math.random() * 0xFFFFFF).toString(16).padStart(6, '0');
     if (paramC !== null) {
       if (paramC.length === 1) activeColor = SOME_COLORS[paramC] || SOME_COLORS[0];
       else                     activeColor = paramC.startsWith('#') ? paramC : '#' + paramC;
     }
     const colorInput = document.getElementById('myColor');
     colorInput.value = activeColor;
-    //colorInput.value = '#' + Math.floor(Math.random() * 0xFFFFFF).toString(16).padStart(6, '0');
+
     const activeText = urlParams.get('t') ?? '';
     const nameInput = document.getElementById('myName');
     nameInput.value = activeText;
@@ -130,9 +130,17 @@
         const audioTrack = stream.getAudioTracks()[0];
         for (const target in pcs) {
           const pc = pcs[target];
-          const audioTransceiver = pc.getTransceivers().find(t => t.receiver.track.kind === 'audio');
-          if (audioTransceiver && audioTransceiver.sender) audioTransceiver.sender.replaceTrack(audioTrack);}
+          const t = pc.getTransceivers().find(tr => tr.receiver.track.kind === 'audio');
+          if (t && t.sender) {
+            await t.sender.replaceTrack(audioTrack);
+            if (t.currentDirection !== 'sendrecv') {
+              pc.createOffer().then(o => pc.setLocalDescription(o)).then(() => sendSig(target, { sdp: pc.localDescription })).catch(err => console.warn('Renegotiation offer error:' + err));
+            }
+          }
+          else alert('ERROR: audio somehow never got enabled in initPC?');
+        }
       } catch (err) {alert('Voice/Microphone Access Error: ' + err);}};
+
 
     function initPC(target, isInitiator) {
       if (!target || pcs[target]) return pcs[target];
@@ -187,10 +195,13 @@
             const pc = pcs[s.from] || initPC(s.from, false);
             if (!pc.iceQueue) pc.iceQueue = [];
             if (s.sdp) {
+             try {
               await pc.setRemoteDescription(s.sdp).catch(err => console.warn('SDP Remote Error: ' + err));
               if (s.sdp.type === 'offer') {
                 await pc.setLocalDescription(await pc.createAnswer()).catch(err => console.warn('SDP Answer Error: ' + err));
-                sendSig(s.from, { sdp: pc.localDescription });}}
+                sendSig(s.from, { sdp: pc.localDescription });}
+             } catch (err) {console.warn('SDP handling error: ' + err); continue;}
+            }
             if (pc.remoteDescription) {while (pc.iceQueue.length) {await pc.addIceCandidate(pc.iceQueue.shift()).catch(err => console.warn('ICE add error:', err));}}
             if (s.candidate) {
               //if (pc.remoteDescription && pc.remoteDescription.type) {await pc.addIceCandidate(s.candidate).catch(err => console.warn('ICE add error: ' + err));}
