@@ -199,6 +199,7 @@
              try {
               await pc.setRemoteDescription(s.sdp) //.catch(err => console.warn('SDP Remote Error (sometimes seen when peer connection is already stable, but we get a queued answer from before it was stable) ' + err));
               if (s.sdp.type === 'offer') {
+                const t = pc.getTransceivers().find(tr => tr.receiver.track.kind === 'audio'); if (t) t.direction = 'sendrecv';  //Force transceiver to negotiate sendrecv even if local mic is not yet attached
                 await pc.setLocalDescription(await pc.createAnswer()).catch(err => alert('SDP Answer Error (never seen this error, so kept in for debugging ****, though it will not hit continue below): ' + err));
                 sendSig(s.from, { sdp: pc.localDescription });}
              } catch (err) {console.warn('SDP handling error: ' + err); continue;}
