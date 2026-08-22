@@ -159,7 +159,8 @@
         //  pc.close();
         //  delete pcs[target];
         //  delete dcs[target];
-        //  const audioEl = document.getElementById('audio_' + target); if (audioEl) audioEl.remove(); }};
+        //  const audioEl = document.getElementById('audio_' + target); if (audioEl) audioEl.remove(); }
+      };
       pc.oniceconnectionstatechange = () => console.error('[ICE State - ' + target + ']', pc.iceConnectionState);
 
       //1:58 PM 8/21/2026: moved below into isInitiator block// Pre-allocate audio channel in initial SDP (even if mic is off)
