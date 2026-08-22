@@ -55,6 +55,7 @@
     const pcs = {}, dcs = {}, moves = [], ctx = cvs.getContext('2d');
     let stream, hoverCell = null;
     let forgetFailedPC = 1; // Set to > 0 to enable automatic teardown on connection failure
+    window.addEventListener('beforeunload', (event) => {const hasActiveConnections = Object.keys(pcs).length > 0; if (hasActiveConnections) {event.preventDefault(); event.returnValue = '';}});
 
     function draw() {
       ctx.clearRect(0, 0, SIZE, SIZE);
@@ -126,16 +127,18 @@
       .catch(err => console.warn('Load Board Error: ' + err));
 
     const startVoice = async () => {
+      document.querySelectorAll('audio').forEach(a => {if (a.paused) a.play().catch(err => console.warn('ERROR: never seen: audio will not play (' + a.id + '): ' + err));});
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const audioTrack = stream.getAudioTracks()[0];
+        if (!stream) stream = await navigator.mediaDevices.getUserMedia({ audio: true }); //stream starts as null and can only be set here, so do we ever need to reload getUserMedia to get some update?  or can we just use if (!stream) to get this only once?
+        let audioTrack = stream.getAudioTracks()[0];
+        if (!audioTrack || audioTrack.readyState !== 'live') {stream = await navigator.mediaDevices.getUserMedia({ audio: true }); audioTrack = stream.getAudioTracks()[0];}
         for (const target in pcs) {
           const pc = pcs[target];
           const t = pc.getTransceivers().find(tr => tr.receiver.track.kind === 'audio');
           if (t && t.sender) {
             t.direction = 'sendrecv'; //this shouldn't help since track gets added as sendrecv in initPC?
             t.sender.replaceTrack(audioTrack); //2:23 AM 8/22/2026 removed await since it should not be needed here
-            //if (t.currentDirection !== 'sendrecv') { //3:29 PM 8/21/2026: this resurrection maybe is not needed any more, so trying without it ****
+            //if (t.currentDirection !== 'sendrecv') { //3:29 PM 8/21/2026: this resurrection maybe is not needed any more, so trying without it
             //  pc.createOffer().then(o => pc.setLocalDescription(o)).then(() => sendSig(target, { sdp: pc.localDescription })).catch(err => console.warn('Renegotiation offer error:' + err));
             //}
           }
@@ -208,7 +211,7 @@
         //****sendSig(ID, { ping: true }); //DEBUG: No need to ping since server never expires anyone (and we want to minimize work for server's lighttpd since it crashes a lot...which is currently being debugged)
         const sRes = await fetch(`/cgi-bin/api.sh?task=get_signals&peer=${ID}`);
         if (sRes.ok) {
-          const list = await sRes.json();
+          const list = await sRes.json(); //****this gets malformed 1 in a million times (happened once when result should have been simply empty [])
           for (const s of list) {
             if (!s.from || s.from === ID) continue;
             if (s.sdp && s.sdp.type === 'offer') forgetPC(s.from); //perhaps too aggressive, so I could try the line below, but below will probably prevent the peer from resetting me
@@ -224,7 +227,7 @@
                   t.direction = 'sendrecv';  //Force transceiver to negotiate sendrecv even if local mic is not yet attached
                   if (stream && stream.getAudioTracks()[0]) t.sender.replaceTrack(stream.getAudioTracks()[0]);}
                 else alert('ERROR: audio transceiver somehow never got enabled by offerer');
-                await pc.setLocalDescription(await pc.createAnswer()).catch(err => alert('SDP Answer Error (never seen this error, so kept in for debugging ****, though it will not hit continue below): ' + err));
+                await pc.setLocalDescription(await pc.createAnswer()).catch(err => alert('ERROR: never seen: SDP Answer (kept catch in for debugging ****, though it now will not hit continue below): ' + err));
                 sendSig(s.from, { sdp: pc.localDescription });}
              } catch (err) {console.warn('SDP handling error: ' + err); continue;}
             }
