@@ -52,8 +52,9 @@
     function updateID() {ID = colorInput.value.slice(1) + nameInput.value.replace(/[^a-zA-Z0-9]/g, '');}
     updateID();
 
-    const pcs = {}, dcs = [], moves = [], ctx = cvs.getContext('2d');
+    const pcs = {}, dcs = {}, moves = [], ctx = cvs.getContext('2d');
     let stream, hoverCell = null;
+    let forgetFailedPC = 1; // Set to > 0 to enable automatic teardown on connection failure
 
     function draw() {
       ctx.clearRect(0, 0, SIZE, SIZE);
@@ -113,8 +114,8 @@
       draw();
 
       const payload = JSON.stringify(move);
-      dcs.forEach(dc => dc.readyState === 'open' && dc.send(payload));
-      
+      for (const target in dcs) {if (dcs[target].readyState === 'open') dcs[target].send(payload);}      
+
       fetch('/cgi-bin/api.sh?task=post_move', { method: 'POST', body: payload })  //****Surprisingly, results are never cached/stale, so I am omitting { cache: 'no-store' }
         .catch(err => alert('Post Move Error: ' + err));
     };
@@ -132,20 +133,34 @@
           const pc = pcs[target];
           const t = pc.getTransceivers().find(tr => tr.receiver.track.kind === 'audio');
           if (t && t.sender) {
-            await t.sender.replaceTrack(audioTrack);
-            t.direction = 'sendrecv'; //****this shouldn't help since track gets added as sendrecv in initPC?
+            t.direction = 'sendrecv'; //this shouldn't help since track gets added as sendrecv in initPC?
+            t.sender.replaceTrack(audioTrack); //2:23 AM 8/22/2026 removed await since it should not be needed here
             //if (t.currentDirection !== 'sendrecv') { //3:29 PM 8/21/2026: this resurrection maybe is not needed any more, so trying without it ****
             //  pc.createOffer().then(o => pc.setLocalDescription(o)).then(() => sendSig(target, { sdp: pc.localDescription })).catch(err => console.warn('Renegotiation offer error:' + err));
             //}
           }
-          else alert('ERROR: audio somehow never got enabled in initPC?');
+          else alert('ERROR: audio transceiver not yet enabled...but must be mid-negotiation?');
         }
       } catch (err) {alert('Voice/Microphone Access Error: ' + err);}};
 
+    //eventually I will use forgetFailedPC quantity to globally manage messed up connections:
+    function forgetPC(target) {if (forgetFailedPC > 0 && pcs[target]) {console.warn('[Teardown] Clearing dead connection for ' + target);
+      pcs[target].close();
+      delete pcs[target];
+      delete dcs[target]; //dc.onclose does this redundantly, but the browser might trigger this close event with a long delay causing us to reuse the old one and then have that ripped away from us when the browser finishes
+      const audioEl = document.getElementById('audio_' + target); if (audioEl) audioEl.remove();}}
 
     function initPC(target, isInitiator) {
       if (!target || pcs[target]) return pcs[target];
       const pc = pcs[target] = new RTCPeerConnection();
+      pc.onconnectionstatechange = () => {console.error('[Conn State - ' + target + ']', pc.connectionState);
+        if (pc.connectionState === 'failed') forgetPC(target);
+        //if (forgetFailedPC > 0 && pc.connectionState === 'failed') { console.warn('[Teardown] Clearing dead connection for ' + target);
+        //  pc.close();
+        //  delete pcs[target];
+        //  delete dcs[target];
+        //  const audioEl = document.getElementById('audio_' + target); if (audioEl) audioEl.remove(); }};
+      pc.oniceconnectionstatechange = () => console.error('[ICE State - ' + target + ']', pc.iceConnectionState);
 
       //1:58 PM 8/21/2026: moved below into isInitiator block// Pre-allocate audio channel in initial SDP (even if mic is off)
       //const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
@@ -168,12 +183,14 @@
             alert('DataChannel Message Error: ' + err);
           }
         };
-        dcs.push(dc);
+        dc.onclose = () => delete dcs[target];
+        //dc.onclose = () => { if (dcs[target] === dc) delete dcs[target]; }; //reconstructed dc is possible, but delete dcs is also done in the teardown
+        dcs[target] = dc;
       };
 
       if (isInitiator) {
-        const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
-        if (stream && stream.getAudioTracks()[0]) audioTransceiver.sender.replaceTrack(stream.getAudioTracks()[0]);
+        const t = pc.addTransceiver('audio', { direction: 'sendrecv' });
+        if (stream && stream.getAudioTracks()[0]) t.sender.replaceTrack(stream.getAudioTracks()[0]);
         attachDC(pc.createDataChannel('game'));
         pc.createOffer().then(o => pc.setLocalDescription(o)).then(() => sendSig(target, { sdp: pc.localDescription })).catch(err => console.warn('Initial offer error:' + err));
       } else {
@@ -193,13 +210,19 @@
           const list = await sRes.json();
           for (const s of list) {
             if (!s.from || s.from === ID) continue;
+            if (s.sdp && s.sdp.type === 'offer') forgetPC(s.from); //perhaps too aggressive, so I could try the line below, but below will probably prevent the peer from resetting me
+            //if (s.sdp && s.sdp.type === 'offer') {const pc_old = pcs[s.from]; if (pc_old && pc_old.connectionState === 'failed') forgetPC(s.from);}
             const pc = pcs[s.from] || initPC(s.from, false);
             if (!pc.iceQueue) pc.iceQueue = [];
             if (s.sdp) {
              try {
               await pc.setRemoteDescription(s.sdp) //.catch(err => console.warn('SDP Remote Error (sometimes seen when peer connection is already stable, but we get a queued answer from before it was stable) ' + err));
               if (s.sdp.type === 'offer') {
-                const t = pc.getTransceivers().find(tr => tr.receiver.track.kind === 'audio'); if (t) t.direction = 'sendrecv';  //Force transceiver to negotiate sendrecv even if local mic is not yet attached
+                const t = pc.getTransceivers().find(tr => tr.receiver.track.kind === 'audio');
+                if (t && t.sender) {
+                  t.direction = 'sendrecv';  //Force transceiver to negotiate sendrecv even if local mic is not yet attached
+                  if (stream && stream.getAudioTracks()[0]) t.sender.replaceTrack(stream.getAudioTracks()[0]);}
+                else alert('ERROR: audio transceiver somehow never got enabled by offerer');
                 await pc.setLocalDescription(await pc.createAnswer()).catch(err => alert('SDP Answer Error (never seen this error, so kept in for debugging ****, though it will not hit continue below): ' + err));
                 sendSig(s.from, { sdp: pc.localDescription });}
              } catch (err) {console.warn('SDP handling error: ' + err); continue;}
