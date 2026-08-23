@@ -47,6 +47,12 @@
     nameInput.value = activeText;
     //nameInput.value = String.fromCharCode(65 + Math.floor(Math.random() * 26));
 
+    const gameDir = urlParams.get('g') ?? 'ttt';
+    const movesQuery = '?file=' + gameDir + '/moves';
+    const signalsQuerySlash = '?file=' + gameDir + '/s/';
+    const peersDir = gameDir + '/p';
+
+
     const N = 10, SIZE = 700, CELL = SIZE / N;
     let ID;
     function updateID() {ID = colorInput.value.slice(1) + nameInput.value.replace(/[^a-zA-Z0-9]/g, '');}
@@ -117,11 +123,11 @@
       const payload = JSON.stringify(move);
       for (const target in dcs) {if (dcs[target].readyState === 'open') dcs[target].send(payload);}      
 
-      fetch('/cgi-bin/api.sh?task=post_move', { method: 'POST', body: payload })  //****Surprisingly, results are never cached/stale, so I am omitting { cache: 'no-store' }
+      fetch('/cgi-bin/append.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload })
         .catch(err => alert('Post Move Error: ' + err));
     };
 
-    const loadBoard = () => fetch('/cgi-bin/api.sh?task=get_moves')
+    const loadBoard = () => fetch('/cgi-bin/cat.sh' + movesQuery, { cache: 'no-store' })  //Surprisingly, results are never cached/stale, so I could omit { cache: 'no-store' } in all fetches
       .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
       .then(mList => { moves.length = 0; mList.forEach(recordMove); draw(); })
       .catch(err => console.warn('Load Board Error: ' + err));
@@ -137,10 +143,7 @@
           const t = pc.getTransceivers().find(tr => tr.receiver.track.kind === 'audio');
           if (t && t.sender) {
             t.direction = 'sendrecv'; //this shouldn't help since track gets added as sendrecv in initPC?
-            t.sender.replaceTrack(audioTrack); //2:23 AM 8/22/2026 removed await since it should not be needed here
-            //if (t.currentDirection !== 'sendrecv') { //3:29 PM 8/21/2026: this resurrection maybe is not needed any more, so trying without it
-            //  pc.createOffer().then(o => pc.setLocalDescription(o)).then(() => sendSig(target, { sdp: pc.localDescription })).catch(err => console.warn('Renegotiation offer error:' + err));
-            //}
+            t.sender.replaceTrack(audioTrack);
           }
           else alert('ERROR: audio transceiver not yet enabled...but must be mid-negotiation?');
         }
@@ -158,21 +161,11 @@
       const pc = pcs[target] = new RTCPeerConnection();
       pc.onconnectionstatechange = () => {console.error('[Conn State - ' + target + ']', pc.connectionState);
         if (pc.connectionState === 'failed') forgetPC(target);
-        //if (forgetFailedPC > 0 && pc.connectionState === 'failed') { console.warn('[Teardown] Clearing dead connection for ' + target);
-        //  pc.close();
-        //  delete pcs[target];
-        //  delete dcs[target];
-        //  const audioEl = document.getElementById('audio_' + target); if (audioEl) audioEl.remove(); }
       };
       pc.oniceconnectionstatechange = () => console.error('[ICE State - ' + target + ']', pc.iceConnectionState);
-
-      //1:58 PM 8/21/2026: moved below into isInitiator block// Pre-allocate audio channel in initial SDP (even if mic is off)
-      //const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
-      //if (stream && stream.getAudioTracks()[0]) audioTransceiver.sender.replaceTrack(stream.getAudioTracks()[0]);
-
       pc.ontrack = e => {
-        let a = document.getElementById(`audio_${target}`) || document.createElement('audio');
-        a.id = `audio_${target}`; a.autoplay = true;
+        let a = document.getElementById('audio_' + target) || document.createElement('audio');
+        a.id = 'audio_' + target; a.autoplay = true;
         if (!a.parentNode) audios.appendChild(a);
         a.srcObject = e.streams[0] || new MediaStream([e.track]);
       };
@@ -203,13 +196,13 @@
       return pc;
     }
 
-    const sendSig = (to, body) => fetch(`/cgi-bin/api.sh?task=send_signal&peer=${to}`, { method: 'POST', body: JSON.stringify({ from: ID, ...body }) })
+    const sendSig = (to, body) => fetch('/cgi-bin/append.sh' + signalsQuerySlash + to, { method: 'POST', body: JSON.stringify({ from: ID, ...body }) })
       .catch(err => console.warn('Send Signal Error: ' + err));
 
     setInterval(async () => {
       try {
         //****sendSig(ID, { ping: true }); //DEBUG: No need to ping since server never expires anyone (and we want to minimize work for server's lighttpd since it crashes a lot...which is currently being debugged)
-        const sRes = await fetch(`/cgi-bin/api.sh?task=get_signals&peer=${ID}`);
+        const sRes = await fetch('/cgi-bin/mv_rm.sh' + signalsQuerySlash + ID + '&peer=' + peersDir + '/' + ID, { cache: 'no-store' });
         if (sRes.ok) {
           const list = await sRes.json(); //****this gets malformed 1 in a million times (happened once when result should have been simply empty [])
           for (const s of list) {
@@ -237,12 +230,7 @@
               if (pc.remoteDescription) {await pc.addIceCandidate(s.candidate).catch(err => console.warn('ICE add error: ' + err));}
               else pc.iceQueue.push(s.candidate);}
         }}
-        //const pRes = await fetch('/cgi-bin/api.sh?task=get_peers');  //OLD METHOD: returns a string which is an array of strings like ["bob","alice","134"]
-        //if (pRes.ok) {
-        //  const peerList = await pRes.json();
-        //  for (const target of peerList) {
-        //    if (target !== ID && !pcs[target] && ID < target) initPC(target, true); }}
-        const pRes = await fetch('/cgi-bin/api.sh?task=get_peers');  //NEW METHOD: returns a string which is comma-separated elements like bob,alice,134, (has ending comma; unique "empty list" response adds asterisk: *,)
+        const pRes = await fetch('/cgi-bin/ls.sh?file=' + peersDir, { cache: 'no-store' });  //NEW METHOD: returns a string which is comma-separated elements like bob,alice,134, (has ending comma; unique "empty list" response adds asterisk: *,)
         if (pRes.ok) {
           const peers = (await pRes.text()).split(','); if (peers.length < 3) console.warn('just me in peers (' + peers[0] + ')');
           const last = peers.pop(); if (last !== '') alert('ERROR: peer name (' + last + ') without trailing comma');
