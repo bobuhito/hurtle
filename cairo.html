@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Cairo Tiler</title>
+  <style>
+    canvas { border: 1px solid #ccc; background: #fafafa; cursor: crosshair; }
+    main { display: inline-flex; flex-direction: column; }
+    .controls { display: flex; height: 48px; }
+    .controls button { flex: 1; font-size: 16px; }
+  </style>
+</head>
+<body>
+<main>
+  <canvas id="myCanvas" width="680" height="680"></canvas>
+  <nav class="controls">
+    <button onclick="doToggle()"><b>Rotate</b><br>space</button>
+    <button onclick="doPlace()"><b>Place Tile</b><br>click</button>
+    <button onclick="undo()"><b>Undo</b><br>backspace</button>
+    <button onclick="doReset()"><b>Reset</b><br>ctrl-R</button>
+    <button onclick="loadBoard()"><b>Sync</b><br>ctrl-S</button>
+    <button onclick="startVoice()"><b>Mic</b><br>🎙️</button>
+  </nav>
+</main>
+<div id="audios"></div>
+<script>
+/*
+<p><strong>Hover</strong> near the middle of <strong>long pentagon edges</strong> (the shorter pentagon edge can not be used) to preview snap options<br>
+<strong>Spacebar</strong> to toggle between the two placement options<br>
+<strong>Left Click</strong> to place the previewed tile<br>
+<strong>Backspace</strong> to Undo placements<br>
+<strong>Ctrl-R</strong> to Reset (removes all tiles and places one tile at origin)<br>
+<strong>Ctrl-S</strong> to Sync<br>
+<strong>Mic On</strong> to enable WebRTC voice
+*/
+const SOME_COLORS = [
+  "#06b6d4", // Bright Cyan
+  "#16a34a", // Emerald Green
+  "#2563eb", // Royal Blue
+  "#84cc16", // Lime Green
+  "#9333ea", // Deep Purple
+  "#9a3412", // Rust / Brown
+  "#dc2626", // Red
+  "#ea580c", // Dark Orange
+  "#eab308", // Gold / Yellow
+  "#ec4899"  // Hot Pink
+];
+const urlParams = new URLSearchParams(window.location.search);
+const paramC = urlParams.get('c');
+let activeColor = '#' + Math.floor(Math.random() * 0xFFFFFF).toString(16).padStart(6, '0');
+if (paramC !== null) {
+  if (paramC.length === 1) activeColor = SOME_COLORS[paramC] || SOME_COLORS[0];
+  else                     activeColor = paramC.startsWith('#') ? paramC : '#' + paramC;
+}
+const activeText = urlParams.get('t') ?? '';
+const gameDir = urlParams.get('g') ?? 'c';
+const movesQuery = '?file=' + gameDir + '/moves';
+const signalsQuerySlash = '?file=' + gameDir + '/s/';
+const peersDir = gameDir + '/p';
+const ID = activeColor.slice(1) + activeText.replace(/[^a-zA-Z0-9]/g, '');
+
+const canvas = document.getElementById('myCanvas');
+const ctx = canvas.getContext('2d');
+
+const pcs = {}, dcs = {};
+let stream;
+let forgetFailedPC = 1;
+window.addEventListener('beforeunload', (event) => {const hasActiveConnections = Object.keys(pcs).length > 0; if (hasActiveConnections) {event.preventDefault(); event.returnValue = '';}});
+
+const sqrt3 = Math.sqrt(3);
+const drawScale = 8;
+const drawWby2 = canvas.width / 2;
+const drawHby2 = canvas.height / 2;
+
+const baseVertices = [
+  [ 2, -2,     0, 0],
+  [ 2,  0,     2, 0],
+  [ 0,  0,     2, 2],
+  [-2,  0,     2, 0],
+  [-2,  2,     0, 0]
+];
+
+const mids = [  //Master list of edge midpoints: [cx, dx, cy, dy, angle_idx, player]
+  [ 2, -1,     1, 0,      2,      "#94a3b8", ""],
+  [ 1,  0,     2, 1,      5,      "#94a3b8", ""],
+  [-1,  0,     2, 1,      7,      "#94a3b8", ""],
+  [-2,  1,     1, 0,     10,      "#94a3b8", ""]
+];
+
+const blockedMids = [0,0,0,0];  //Indicator of whether the edge has been paired (or blocked from getting more tiles on this edge in some way)
+
+//shift the first edge midpoint to be at origin to make setTransform easier during draw:
+const shift = [-2, 1, -1, 0];
+const applyShift = matrix => matrix.forEach(row => { for (let i = 0; i < shift.length; i++) row[i] += shift[i] });
+applyShift(baseVertices);
+applyShift(mids);
+
+const undoStack = [];
+let hoveredMidIdx = -1;
+let currentOptionIdx = 0;
+let isSyncing = false;
+
+// Exact trig components for k * 30 deg: [ca, cb, sa, sb]
+const TRIG30 = [
+  [ 0, 2,  0, 0], // 0 deg
+  [ 1, 0,  0, 1], // 30 deg
+  [ 0, 1,  1, 0], // 60 deg
+  [ 0, 0,  0, 2], // 90 deg
+  [ 0,-1,  1, 0], // 120 deg
+  [-1, 0,  0, 1], // 150 deg
+  [ 0,-2,  0, 0], // 180 deg
+  [-1, 0,  0,-1], // 210 deg
+  [ 0,-1, -1, 0], // 240 deg
+  [ 0, 0,  0,-2], // 270 deg
+  [ 0, 1, -1, 0], // 300 deg
+  [ 1, 0,  0,-1]  // 330 deg
+];
+
+function transformTuple(pt, mirror, k) {
+  let ax = pt[0], bx = pt[1], ay = pt[2], by = pt[3];
+  if (mirror) { ay = -ay; by = -by; }
+  const [ca, cb, sa, sb] = TRIG30[k];
+  return [
+    ((ax * cb + bx * ca) - (ay * sb + by * sa)) / 2,
+    ((3 * ax * ca + bx * cb) - (3 * ay * sa + by * sb)) / 2,
+    ((ax * sb + bx * sa) + (ay * cb + by * ca)) / 2,
+    ((3 * ax * sa + bx * sb) + (3 * ay * ca + by * cb)) / 2
+  ];
+}
+function addTuples(t1, t2) { return [t1[0] + t2[0], t1[1] + t2[1], t1[2] + t2[2], t1[3] + t2[3]]; }
+function subTuples(t1, t2) { return [t1[0] - t2[0], t1[1] - t2[1], t1[2] - t2[2], t1[3] - t2[3]]; }
+
+// Build reusable Path2D from baseVertices
+const pentagonPath = new Path2D();            pentagonPath.moveTo(sqrt3 * baseVertices[0][0] + baseVertices[0][1], sqrt3 * baseVertices[0][2] + baseVertices[0][3]);
+for (let i = 1; i < baseVertices.length; i++) pentagonPath.lineTo(sqrt3 * baseVertices[i][0] + baseVertices[i][1], sqrt3 * baseVertices[i][2] + baseVertices[i][3]);
+pentagonPath.closePath();
+
+const pentagonCenter = baseVertices.reduce((acc, v) => [acc[0] + (sqrt3 * v[0] + v[1]) / 5, acc[1] + (sqrt3 * v[2] + v[3]) / 5], [0, 0]);
+
+function getCandidates(targetIdx) {
+  const Et = mids[targetIdx];
+  const targetM = Et.slice(0, 4);
+  const At = Et[4];
+  const targetPos = targetIdx % 4;
+  const candidates = [];
+  for (let i = 0; i < 4; i++) {
+    if ((targetPos % 2) === (i % 2)) continue;
+
+    const Ai = mids[i][4];
+    const m = 0;
+    const k = (At - Ai + 18) % 12;
+    const candMidI = transformTuple(mids[i].slice(0, 4), m, k);
+    const translation = subTuples(targetM, candMidI);
+
+    const cMids = mids.slice(0, 4).map(bm => {
+      const transformedM = addTuples(transformTuple(bm.slice(0, 4), m, k), translation);
+      const nAngle = (bm[4] + k) % 12;
+      return [...transformedM, nAngle, activeColor, activeText];});
+
+    candidates.push({ mids: cMids });}
+  return candidates;
+}
+
+let panX = 0, panY = 0, startX = 0, startY = 0, isPanning = true; //line is only for new pan capability
+function setMidTransform(m) {
+  const [ca, cb, sa, sb] = TRIG30[(m[4] + 10) % 12];   //10%12 is effectively subtracting of mids[0][0]
+  const cos = (ca * sqrt3 + cb) / 2;
+  const sin = (sa * sqrt3 + sb) / 2;
+
+  const a =  drawScale * cos;
+  const b =  drawScale * sin;
+  const c = -drawScale * sin;
+  const d =  drawScale * cos;
+  const e =  drawScale * (sqrt3 * m[0] + m[1]) + drawWby2 + panX;
+  const f =  drawScale * (sqrt3 * m[2] + m[3]) + drawHby2 + panY;
+
+  ctx.setTransform(a, b, c, d, e, f);
+}
+
+function draw() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (let i = 0; i < mids.length; i += 4) {
+    const m = mids[i];
+    setMidTransform(m);
+
+    ctx.fillStyle = typeof m[5] === 'string' ? m[5] : (SOME_COLORS[m[5]] || SOME_COLORS[0]);
+    //ctx.fillStyle = "#94a3b8";
+    //ctx.fillStyle = m[5];
+    ctx.fill(pentagonPath);
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = 0.5 / drawScale;
+    ctx.stroke(pentagonPath);
+
+    // Draw letter at pentagon center
+    ctx.fillStyle = '#1e293b';
+    ctx.font = 'bold 2.0px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(m[6] ?? "", pentagonCenter[0], pentagonCenter[1]);}
+  if (hoveredMidIdx !== -1) {
+    const candidates = getCandidates(hoveredMidIdx);
+    if (candidates.length > 0) {
+      const cand = candidates[currentOptionIdx % candidates.length];
+      setMidTransform(cand.mids[0]);
+    ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
+    ctx.fill(pentagonPath);
+    ctx.strokeStyle = '#2563eb';
+    ctx.lineWidth = 2.0 / drawScale;
+    ctx.stroke(pentagonPath);
+    }}}
+
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left - drawWby2 - panX) / drawScale;
+  const my = (e.clientY - rect.top  - drawHby2 - panY) / drawScale;
+  let minDist = Infinity;
+  let nearest = -1;
+  for (let i = 0; i < mids.length; i++) {if (blockedMids[i] === 1) continue;
+    const d = Math.hypot(mx - sqrt3 * mids[i][0] - mids[i][1], my - sqrt3 * mids[i][2] - mids[i][3]);
+    if (d < minDist) {minDist = d; nearest = i;}}
+  if (minDist < 6) {
+    isPanning = false; //line is only for new pan capability
+    if (hoveredMidIdx !== nearest) {
+      hoveredMidIdx = nearest;
+      currentOptionIdx = 0;
+      draw();}
+    //else <--this line is the only differing line between mousemove (really designed for laptops with mouse/touchpad) and pointerdown listeners 
+  }
+  //else {hoveredMidIdx = -1; draw();}
+});
+
+//block is only for new pan capability:
+canvas.addEventListener('pointerup', e => { if (isPanning) {
+  const dx = e.clientX - startX;
+  const dy = e.clientY - startY;
+  if (Math.hypot(dx, dy) > 6) {
+    panX += dx;
+    panY += dy;
+    wasDragged = true;
+    draw();
+  }}
+  else isPanning = true;
+});
+
+//Only for Tablet/Phone touch support: Tapping an edge sets target directly without intermediate hover jumps:
+canvas.addEventListener('pointerdown', e => {
+
+//block is only for new pan capability:
+if (hoveredMidIdx !== -1) {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left - drawWby2 - panX) / drawScale;
+  const my = (e.clientY - rect.top  - drawHby2 - panY) / drawScale;
+  let minDist = Infinity;
+  let nearest = -1;
+  for (let i = 0; i < mids.length; i++) {if (blockedMids[i] === 1) continue;
+    const d = Math.hypot(mx - sqrt3 * mids[i][0] - mids[i][1], my - sqrt3 * mids[i][2] - mids[i][3]);
+    if (d < minDist) {minDist = d; nearest = i;}}
+  if (minDist < 6) {
+    isPanning = false; //line is only for new pan capability
+    //if (hoveredMidIdx !== nearest) {
+    //  hoveredMidIdx = nearest;
+    //  currentOptionIdx = 0;
+    //  draw();}
+    //else {currentOptionIdx = (currentOptionIdx + 1) % getCandidates(nearest).length; draw();} //Tapping the SAME edge again toggles placement option on touch
+  }
+  else {hoveredMidIdx = -1; isPanning = true;}
+}
+if (hoveredMidIdx === -1) {startX = e.clientX; startY = e.clientY;}
+
+
+if (e.pointerType === 'touch') {e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left - drawWby2 - panX) / drawScale;
+  const my = (e.clientY - rect.top  - drawHby2 - panY) / drawScale;
+  let minDist = Infinity;
+  let nearest = -1;
+  for (let i = 0; i < mids.length; i++) {if (blockedMids[i] === 1) continue;
+    const d = Math.hypot(mx - sqrt3 * mids[i][0] - mids[i][1], my - sqrt3 * mids[i][2] - mids[i][3]);
+    if (d < minDist) {minDist = d; nearest = i;}}
+  if (minDist < 6) {
+    isPanning = false; //line is only for new pan capability
+    if (hoveredMidIdx !== nearest) {
+      hoveredMidIdx = nearest;
+      currentOptionIdx = 0;
+      draw();}
+    else {currentOptionIdx = (currentOptionIdx + 1) % getCandidates(nearest).length; draw();} //Tapping the SAME edge again toggles placement option on touch
+  }
+  //else {hoveredMidIdx = -1; draw();}
+}});
+
+function recordMove(m) {if (!m || !Array.isArray(m) || m.length !== 4) {alert('ERROR: expected a tile containing exactly 4 mids'); return;}
+  const pairedIndices = [];
+  const newBlocked = new Array(m.length).fill(0);
+  for (let cIdx = 0; cIdx < m.length; cIdx++) {const cM = m[cIdx];
+  for (let i = 0; i < mids.length; i++) {const existing = mids[i];
+      if (existing[0] === cM[0] && existing[1] === cM[1] && existing[2] === cM[2] && existing[3] === cM[3]) {
+        if ((existing[4] - cM[4] + 12) % 12 !== 6) alert('ERROR: tile edges cross at indices ' + i + ' ' + (mids.length + cIdx));
+        else if (blockedMids[i] !== 0) alert('ERROR: three tile edges at indices ' + i + ' ' + (mids.length + cIdx));
+        if (blockedMids[i] === 0) {blockedMids[i] = 1; pairedIndices.push(i);}
+        newBlocked[cIdx] = 1;
+        break;}}}
+  undoStack.push({pairedIndices, numNewMids: m.length});
+  mids.push(...m);
+  blockedMids.push(...newBlocked);}
+
+function forgetPC(target) {if (forgetFailedPC > 0 && pcs[target]) {console.warn('[Teardown] Clearing dead connection for ' + target);
+    pcs[target].close();
+    delete pcs[target];
+    delete dcs[target]; //dc.onclose does this redundantly, but the browser might trigger this close event with a long delay causing us to reuse the old one and then have that ripped away from us when the browser finishes
+    const audioEl = document.getElementById('audio_' + target); if (audioEl) audioEl.remove();}}
+
+function initPC(target, isInitiator) {
+  if (!target || pcs[target]) return pcs[target];
+  const pc = pcs[target] = new RTCPeerConnection();
+  pc.onconnectionstatechange = () => {console.error('[Conn State - ' + target + ']', pc.connectionState);
+    if (pc.connectionState === 'failed') forgetPC(target);};
+  pc.oniceconnectionstatechange = () => console.error('[ICE State - ' + target + ']', pc.iceConnectionState);
+  pc.ontrack = e => {
+    let a = document.getElementById('audio_' + target) || document.createElement('audio');
+    a.id = 'audio_' + target; a.autoplay = true;
+    if (!a.parentNode) document.getElementById('audios').appendChild(a);
+    a.srcObject = e.streams[0] || new MediaStream([e.track]);};
+  pc.onicecandidate = e => e.candidate && sendSig(target, { candidate: e.candidate });
+  const attachDC = dc => {dc.onmessage = e => {
+      try {recordMove(JSON.parse(e.data)); draw();}
+      catch (err) {alert('DataChannel Message Error: ' + err);}};
+    dc.onclose = () => delete dcs[target];  //dc.onclose = () => { if (dcs[target] === dc) delete dcs[target]; }; //reconstructed dc is possible, but delete dcs is also done in the teardown
+    dcs[target] = dc;};
+  if (isInitiator) {
+    const t = pc.addTransceiver('audio', { direction: 'sendrecv' });
+    if (stream && stream.getAudioTracks()[0]) t.sender.replaceTrack(stream.getAudioTracks()[0]);
+    attachDC(pc.createDataChannel('game'));
+    pc.createOffer().then(o => pc.setLocalDescription(o)).then(() => sendSig(target, { sdp: pc.localDescription })).catch(err => console.warn('Initial offer error:' + err));}
+  else {pc.ondatachannel = e => attachDC(e.channel);}
+  return pc;}
+
+const startVoice = async () => {
+  document.querySelectorAll('audio').forEach(a => {if (a.paused) a.play().catch(err => console.warn('ERROR: audio will not play (' + a.id + '): ' + err));});
+  try {
+    if (!stream) stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    let audioTrack = stream.getAudioTracks()[0];
+    if (!audioTrack || audioTrack.readyState !== 'live') {stream = await navigator.mediaDevices.getUserMedia({ audio: true }); audioTrack = stream.getAudioTracks()[0];}
+    for (const target in pcs) {
+      const pc = pcs[target];
+      const t = pc.getTransceivers().find(tr => tr.receiver.track.kind === 'audio');
+      if (t && t.sender) {
+        t.direction = 'sendrecv';
+        t.sender.replaceTrack(audioTrack);}
+      else alert('ERROR: audio transceiver not yet enabled...must be mid-negotiation with ' + target);}
+  } catch (err) { alert('Voice/Microphone Access Error: ' + err); }};
+
+const sendSig = (to, body) => fetch('/cgi-bin/append.sh' + signalsQuerySlash + to, { method: 'POST', body: JSON.stringify({ from: ID, ...body }) }).catch(err => console.warn('Send Signal Error: ' + err));
+
+setInterval(async () => {
+  try {
+    const sRes = await fetch('/cgi-bin/mv_rm.sh' + signalsQuerySlash + ID + '&peer=' + peersDir + '/' + ID, { cache: 'no-store' });
+    if (sRes.ok) {
+      const list = await sRes.json();
+      for (const s of list) {
+        if (!s.from || s.from === ID) continue;
+        if (s.sdp && s.sdp.type === 'offer') forgetPC(s.from);
+        const pc = pcs[s.from] || initPC(s.from, false);
+        if (!pc.iceQueue) pc.iceQueue = [];
+        if (s.sdp) {
+          try {
+            await pc.setRemoteDescription(s.sdp);
+            if (s.sdp.type === 'offer') {
+              const t = pc.getTransceivers().find(tr => tr.receiver.track.kind === 'audio');
+              if (t && t.sender) {
+                t.direction = 'sendrecv';
+                if (stream && stream.getAudioTracks()[0]) t.sender.replaceTrack(stream.getAudioTracks()[0]);}
+              else alert('ERROR: audio transceiver somehow never got enabled by offerer ' + s.from);
+              await pc.setLocalDescription(await pc.createAnswer()).catch(err => alert('ERROR: never seen: SDP Answer (kept catch in for debugging ****, though it now will not hit continue below): ' + err));
+              sendSig(s.from, { sdp: pc.localDescription });}
+          } catch (err) { console.warn('SDP handling error: ' + err); continue; }
+        }
+        if (pc.remoteDescription) {while (pc.iceQueue.length) {await pc.addIceCandidate(pc.iceQueue.shift()).catch(err => console.warn('ICE add error:', err));}}
+        if (s.candidate) {
+          if (pc.remoteDescription) await pc.addIceCandidate(s.candidate).catch(err => console.warn('ICE add error: ' + err));
+          else pc.iceQueue.push(s.candidate);}
+    }}
+    const pRes = await fetch('/cgi-bin/ls.sh?file=' + peersDir, { cache: 'no-store' });  //NEW METHOD: returns a string which is comma-separated elements like bob,alice,134, (has ending comma; unique "empty list" response adds asterisk: *,)
+    if (pRes.ok) {
+      const peers = (await pRes.text()).split(','); if (peers.length < 3) console.warn('just me in peers (' + peers[0] + ')');
+      const last = peers.pop(); if (last !== '') alert('ERROR: peer name (' + last + ') without trailing comma');
+      for (const target of peers) {
+        if (target.length < 6) alert('ERROR: peer name (' + target + ') should start with 6 color characters');
+        else if (target !== ID && !pcs[target] && ID < target) initPC(target, true); }}
+  } catch (err) { console.warn('Signaling Loop Error: ' + err); }}, 150000); //****
+
+const loadBoard = () => fetch('/cgi-bin/cat.sh' + movesQuery, { cache: 'no-store' })
+  .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
+  .then(mList => { mids.length = 0; blockedMids.length = 0; undoStack.length = 0; hoveredMidIdx = -1; currentOptionIdx = 0; isSyncing = true;
+    mList.forEach(recordMove); draw();}).catch(err => console.warn('Load Board Error: ' + err));
+
+function doPlace() {
+  if (hoveredMidIdx === -1) return;
+  const candidates = getCandidates(hoveredMidIdx);
+  if (candidates.length === 0) return;
+  const selected = candidates[currentOptionIdx % candidates.length];
+  recordMove(selected.mids);
+  hoveredMidIdx = -1; draw();
+  const payload = JSON.stringify(selected.mids);
+  for (const target in dcs) {if (dcs[target].readyState === 'open') dcs[target].send(payload);}
+  if (isSyncing) {fetch('/cgi-bin/append.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Post Move Error: ' + err));}}
+canvas.addEventListener('click', doPlace);
+
+function doToggle() {if (hoveredMidIdx !== -1) {const candidates = getCandidates(hoveredMidIdx);
+  if (candidates.length > 0) {currentOptionIdx = (currentOptionIdx + 1) % candidates.length; draw();}}}
+
+function undo() {
+  if (undoStack.length === 0) return; isSyncing = false;
+  const lastAction = undoStack.pop();
+  mids.length -= lastAction.numNewMids;
+  lastAction.pairedIndices.forEach(idx => {if (idx < mids.length) blockedMids[idx] = 0;});
+  hoveredMidIdx = -1; draw();}
+
+async function doReset() {
+  mids.length = 4; for (let i = 0; i < mids.length; i++) {mids[i][5] = activeColor; mids[i][6] = activeText;}
+  blockedMids.length = 0; blockedMids.push(0, 0, 0, 0); undoStack.length = 0;
+  if (hoveredMidIdx >= 4) hoveredMidIdx = -1;
+  currentOptionIdx = 0; draw();
+  const payload = JSON.stringify(mids);
+  fetch('/cgi-bin/replace.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Reset Error: ' + err));}
+
+window.addEventListener('keydown', e => {
+       if (e.code === 'Space') {e.preventDefault(); doToggle();}
+  else if (e.code === 'KeyS')  {e.preventDefault(); loadBoard();}
+  else if (e.code === 'KeyU' || e.code === 'Backspace')   {e.preventDefault(); undo();}
+  else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyR') {e.preventDefault(); doReset();}});
+
+draw();
+loadBoard();
+</script>
+</body>
+</html>
