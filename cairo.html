@@ -46,12 +46,11 @@ const SOME_COLORS = [
   "#ec4899"  // Hot Pink
 ];
 const urlParams = new URLSearchParams(window.location.search);
-const paramC = urlParams.get('c');
-let activeColor = '#' + Math.floor(Math.random() * 0xFFFFFF).toString(16).padStart(6, '0');
-if (paramC !== null) {
-  if (paramC.length === 1) activeColor = SOME_COLORS[paramC] || SOME_COLORS[0];
-  else                     activeColor = paramC.startsWith('#') ? paramC : '#' + paramC;
-}
+let activeColor = urlParams.get('c') || window.location.hash;
+if (!activeColor) {activeColor = '#' + Math.floor(Math.random() * 0xFFFFFF).toString(16).padStart(6, '0'); window.location.hash = activeColor;}
+else if (activeColor.length == 1) activeColor = SOME_COLORS[activeColor] || SOME_COLORS[0];
+else if (!activeColor.startsWith('#')) activeColor = '#' + activeColor;
+
 const activeText = urlParams.get('t') ?? '';
 const gameDir = urlParams.get('g') ?? 'c';
 const movesQuery = '?file=' + gameDir + '/moves';
@@ -387,7 +386,7 @@ setInterval(async () => {
       for (const target of peers) {
         if (target.length < 6) alert('ERROR: peer name (' + target + ') should start with 6 color characters');
         else if (target !== ID && !pcs[target] && ID < target) initPC(target, true); }}
-  } catch (err) { console.warn('Signaling Loop Error: ' + err); }}, 150000); //****
+  } catch (err) { console.warn('Signaling Loop Error: ' + err); }}, 1500);
 
 const loadBoard = () => fetch('/cgi-bin/cat.sh' + movesQuery, { cache: 'no-store' })
   .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
