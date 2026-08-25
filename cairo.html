@@ -311,7 +311,10 @@ function forgetPC(target) {if (forgetFailedPC > 0 && pcs[target]) {console.warn(
 
 function initPC(target, isInitiator) {
   if (!target || pcs[target]) return pcs[target];
-  const pc = pcs[target] = new RTCPeerConnection();
+  //const pc = pcs[target] = new RTCPeerConnection();
+  const pc = pcs[target] = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun1.l.google.com:19302' }] });
+  //const pc = pcs[target] = new RTCPeerConnection({ iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] });
+  //const pc = pcs[target] = new RTCPeerConnection({ iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478', 'stun:stun.services.mozilla.com:3478'] }] });
   pc.onconnectionstatechange = () => {console.error('[Conn State - ' + target + ']', pc.connectionState);
     if (pc.connectionState === 'failed') forgetPC(target);};
   pc.oniceconnectionstatechange = () => console.error('[ICE State - ' + target + ']', pc.iceConnectionState);
@@ -320,7 +323,9 @@ function initPC(target, isInitiator) {
     a.id = 'audio_' + target; a.autoplay = true;
     if (!a.parentNode) document.getElementById('audios').appendChild(a);
     a.srcObject = e.streams[0] || new MediaStream([e.track]);};
-  pc.onicecandidate = e => e.candidate && sendSig(target, { candidate: e.candidate });
+  pc.onicecandidate = e => {if (e.candidate) {console.log('[STUN cand - ' + target + ']', e.candidate.url, e.candidate.type, e.candidate.address + ':' + e.candidate.port);
+      sendSig(target, { candidate: e.candidate });}};
+  pc.onicecandidateerror = e => {console.warn('[STUN fail - ' + target + ']', e.url, 'Err:', e.errorCode, e.errorText);};
   const attachDC = dc => {dc.onmessage = e => {
       try {recordMove(JSON.parse(e.data)); draw();}
       catch (err) {alert('DataChannel Message Error: ' + err);}};
@@ -351,13 +356,13 @@ const startVoice = async () => {
 
 const sendSig = (to, body) => fetch('/cgi-bin/append.sh' + signalsQuerySlash + to, { method: 'POST', body: JSON.stringify({ from: ID, ...body }) }).catch(err => console.warn('Send Signal Error: ' + err));
 
-setInterval(async () => {
+
+const poll = async () => {
+//setInterval(async () => {
   try {
     const sRes = await fetch('/cgi-bin/mv_rm.sh' + signalsQuerySlash + ID + '&peer=' + peersDir + '/' + ID, { cache: 'no-store' });
-    if (sRes.ok) {
-      const list = await sRes.json();
-      for (const s of list) {
-        if (!s.from || s.from === ID) continue;
+    if (sRes.ok) {const list = await sRes.json();
+      for (const s of list) {if (!s.from || s.from === ID) continue;
         if (s.sdp && s.sdp.type === 'offer') forgetPC(s.from);
         const pc = pcs[s.from] || initPC(s.from, false);
         if (!pc.iceQueue) pc.iceQueue = [];
@@ -366,14 +371,12 @@ setInterval(async () => {
             await pc.setRemoteDescription(s.sdp);
             if (s.sdp.type === 'offer') {
               const t = pc.getTransceivers().find(tr => tr.receiver.track.kind === 'audio');
-              if (t && t.sender) {
-                t.direction = 'sendrecv';
+              if (t && t.sender) {t.direction = 'sendrecv';
                 if (stream && stream.getAudioTracks()[0]) t.sender.replaceTrack(stream.getAudioTracks()[0]);}
               else alert('ERROR: audio transceiver somehow never got enabled by offerer ' + s.from);
               await pc.setLocalDescription(await pc.createAnswer()).catch(err => alert('ERROR: never seen: SDP Answer (kept catch in for debugging ****, though it now will not hit continue below): ' + err));
               sendSig(s.from, { sdp: pc.localDescription });}
-          } catch (err) { console.warn('SDP handling error: ' + err); continue; }
-        }
+          } catch (err) { console.warn('SDP handling error: ' + err); continue; }}
         if (pc.remoteDescription) {while (pc.iceQueue.length) {await pc.addIceCandidate(pc.iceQueue.shift()).catch(err => console.warn('ICE add error:', err));}}
         if (s.candidate) {
           if (pc.remoteDescription) await pc.addIceCandidate(s.candidate).catch(err => console.warn('ICE add error: ' + err));
@@ -381,12 +384,14 @@ setInterval(async () => {
     }}
     const pRes = await fetch('/cgi-bin/ls.sh?file=' + peersDir, { cache: 'no-store' });  //NEW METHOD: returns a string which is comma-separated elements like bob,alice,134, (has ending comma; unique "empty list" response adds asterisk: *,)
     if (pRes.ok) {
-      const peers = (await pRes.text()).split(','); if (peers.length < 3) console.warn('just me in peers (' + peers[0] + ')');
+      const peers = (await pRes.text()).split(','); if (peers.length < 3) console.warn('just me in peers (returns * if peersDir does not exist: seen once because peersDir maybe somehow got corrupted?): (' + peers[0] + ')');
       const last = peers.pop(); if (last !== '') alert('ERROR: peer name (' + last + ') without trailing comma');
       for (const target of peers) {
         if (target.length < 6) alert('ERROR: peer name (' + target + ') should start with 6 color characters');
         else if (target !== ID && !pcs[target] && ID < target) initPC(target, true); }}
-  } catch (err) { console.warn('Signaling Loop Error: ' + err); }}, 1500);
+  } catch (err) { console.warn('Signaling Loop Error: ' + err); }
+//}, 1500);
+finally { setTimeout(poll, 1500); }};
 
 const loadBoard = () => fetch('/cgi-bin/cat.sh' + movesQuery, { cache: 'no-store' })
   .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
@@ -431,6 +436,7 @@ window.addEventListener('keydown', e => {
 
 draw();
 loadBoard();
+poll(); //setInterval(poll, 1500);
 </script>
 </body>
 </html>
