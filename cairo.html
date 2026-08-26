@@ -67,58 +67,42 @@ let stream;
 let forgetFailedPC = 1;
 window.addEventListener('beforeunload', (event) => {const hasActiveConnections = Object.keys(pcs).length > 0; if (hasActiveConnections) {event.preventDefault(); event.returnValue = '';}});
 
-const sqrt3 = Math.sqrt(3);
 const drawScale = 8;
 const drawWby2 = canvas.width / 2;
 const drawHby2 = canvas.height / 2;
 
-const baseVertices = [
-  [ 2, -2,     0, 0],
-  [ 2,  0,     2, 0],
-  [ 0,  0,     2, 2],
-  [-2,  0,     2, 0],
-  [-2,  2,     0, 0]
+const sqrt3 = Math.sqrt(3);
+const TRIG30 = [  // Exact trig components for k * 30 deg: [ca, cb, sa, sb]: 2*cos = ca*sqrt3+cb, 2*sin = sa*sqrt3+sb
+  [ 0, 2,  0, 0], //   0 deg
+  [ 1, 0,  0, 1], //  30
+  [ 0, 1,  1, 0], //  60
+  [ 0, 0,  0, 2], //  90
+  [ 0,-1,  1, 0], // 120
+  [-1, 0,  0, 1], // 150
+  [ 0,-2,  0, 0], // 180
+  [-1, 0,  0,-1], // 210
+  [ 0,-1, -1, 0], // 240
+  [ 0, 0,  0,-2], // 270
+  [ 0, 1, -1, 0], // 300
+  [ 1, 0,  0,-1]  // 330
 ];
 
-const mids = [  //Master list of edge midpoints: [cx, dx, cy, dy, angle_idx, player]
-  [ 2, -1,     1, 0,      2,      "#94a3b8", ""],
-  [ 1,  0,     2, 1,      5,      "#94a3b8", ""],
-  [-1,  0,     2, 1,      7,      "#94a3b8", ""],
-  [-2,  1,     1, 0,     10,      "#94a3b8", ""]
+const mids = [  //Master list of edge midpoints: [ax, bx, ay, by, angle_idx, playerColor, playerText]: "Cairo Pentagon": all edge lengths are 4 except the "final closing edge" which is (4-4*sqrt3)
+  [ 2, -1,     1, 0,      2,      activeColor, activeText],
+  [ 1,  0,     2, 1,      5,      activeColor, activeText],
+  [-1,  0,     2, 1,      7,      activeColor, activeText],
+  [-2,  1,     1, 0,     10,      activeColor, activeText],
+  [ 0,  0,     0, 0,      0,      activeColor, activeText] //<- short edge
 ];
-
-const blockedMids = [0,0,0,0];  //Indicator of whether the edge has been paired (or blocked from getting more tiles on this edge in some way)
 
 //shift the first edge midpoint to be at origin to make setTransform easier during draw:
-const shift = [-2, 1, -1, 0];
-const applyShift = matrix => matrix.forEach(row => { for (let i = 0; i < shift.length; i++) row[i] += shift[i] });
-applyShift(baseVertices);
-applyShift(mids);
+const origin = mids[0].slice(0, 4);
+mids.forEach(row => { for (let i = 0; i < 4; i++) row[i] -= origin[i]; });
 
-const undoStack = [];
-let hoveredMidIdx = -1;
-let currentOptionIdx = 0;
-let isSyncing = false;
-
-// Exact trig components for k * 30 deg: [ca, cb, sa, sb]
-const TRIG30 = [
-  [ 0, 2,  0, 0], // 0 deg
-  [ 1, 0,  0, 1], // 30 deg
-  [ 0, 1,  1, 0], // 60 deg
-  [ 0, 0,  0, 2], // 90 deg
-  [ 0,-1,  1, 0], // 120 deg
-  [-1, 0,  0, 1], // 150 deg
-  [ 0,-2,  0, 0], // 180 deg
-  [-1, 0,  0,-1], // 210 deg
-  [ 0,-1, -1, 0], // 240 deg
-  [ 0, 0,  0,-2], // 270 deg
-  [ 0, 1, -1, 0], // 300 deg
-  [ 1, 0,  0,-1]  // 330 deg
-];
-
-function transformTuple(pt, mirror, k) {
+function addTuples(t1, t2) { return [t1[0] + t2[0], t1[1] + t2[1], t1[2] + t2[2], t1[3] + t2[3]]; }
+function subTuples(t1, t2) { return [t1[0] - t2[0], t1[1] - t2[1], t1[2] - t2[2], t1[3] - t2[3]]; }
+function transformTuple(pt, k) {
   let ax = pt[0], bx = pt[1], ay = pt[2], by = pt[3];
-  if (mirror) { ay = -ay; by = -by; }
   const [ca, cb, sa, sb] = TRIG30[k];
   return [
     ((ax * cb + bx * ca) - (ay * sb + by * sa)) / 2,
@@ -127,72 +111,67 @@ function transformTuple(pt, mirror, k) {
     ((3 * ax * sa + bx * sb) + (3 * ay * ca + by * cb)) / 2
   ];
 }
-function addTuples(t1, t2) { return [t1[0] + t2[0], t1[1] + t2[1], t1[2] + t2[2], t1[3] + t2[3]]; }
-function subTuples(t1, t2) { return [t1[0] - t2[0], t1[1] - t2[1], t1[2] - t2[2], t1[3] - t2[3]]; }
 
-// Build reusable Path2D from baseVertices
+const mids0L = mids.length;
+const mids0Lm1 = mids0L - 1;
+const baseVertices = [ ...mids.slice(0, mids0Lm1).map(m => subTuples(m, TRIG30[m[4]])),
+  addTuples(mids[mids0L - 2], TRIG30[mids[mids0L - 2][4]]) ];
+
+// Build reusable Path2D from baseVertices:
+const pentagonCenter = baseVertices.reduce((acc, v) => [acc[0] + sqrt3 * v[0] + v[1], acc[1] + sqrt3 * v[2] + v[3]], [0, 0]).map(c => c / baseVertices.length);
 const pentagonPath = new Path2D();            pentagonPath.moveTo(sqrt3 * baseVertices[0][0] + baseVertices[0][1], sqrt3 * baseVertices[0][2] + baseVertices[0][3]);
 for (let i = 1; i < baseVertices.length; i++) pentagonPath.lineTo(sqrt3 * baseVertices[i][0] + baseVertices[i][1], sqrt3 * baseVertices[i][2] + baseVertices[i][3]);
 pentagonPath.closePath();
-
-const pentagonCenter = baseVertices.reduce((acc, v) => [acc[0] + (sqrt3 * v[0] + v[1]) / 5, acc[1] + (sqrt3 * v[2] + v[3]) / 5], [0, 0]);
 
 function getCandidates(targetIdx) {
   const Et = mids[targetIdx];
   const targetM = Et.slice(0, 4);
   const At = Et[4];
-  const targetPos = targetIdx % 4;
+  const targetPos = targetIdx % mids0L;
   const candidates = [];
-  for (let i = 0; i < 4; i++) {
-    if ((targetPos % 2) === (i % 2)) continue;
-
+  for (let i = 0; i < mids0L; i++) {if (((targetPos % 2) !== (i % 2) && targetPos !== mids0Lm1 && i !== mids0Lm1)    ||    (targetPos === mids0Lm1 && i === mids0Lm1)) {
     const Ai = mids[i][4];
-    const m = 0;
     const k = (At - Ai + 18) % 12;
-    const candMidI = transformTuple(mids[i].slice(0, 4), m, k);
+    const candMidI = transformTuple(mids[i].slice(0, 4), k);
     const translation = subTuples(targetM, candMidI);
 
-    const cMids = mids.slice(0, 4).map(bm => {
-      const transformedM = addTuples(transformTuple(bm.slice(0, 4), m, k), translation);
+    const cMids = mids.slice(0, mids0L).map(bm => {
+      const transformedM = addTuples(transformTuple(bm.slice(0, 4), k), translation);
       const nAngle = (bm[4] + k) % 12;
       return [...transformedM, nAngle, activeColor, activeText];});
 
-    candidates.push({ mids: cMids });}
-  return candidates;
-}
+    candidates.push({ mids: cMids });}}
+  return candidates;}
 
 let panX = 0, panY = 0, startX = 0, startY = 0, isPanning = true; //line is only for new pan capability
 function setMidTransform(m) {
-  const [ca, cb, sa, sb] = TRIG30[(m[4] + 10) % 12];   //10%12 is effectively subtracting of mids[0][0]
-  const cos = (ca * sqrt3 + cb) / 2;
-  const sin = (sa * sqrt3 + sb) / 2;
+  const [ca, cb, sa, sb] = TRIG30[(m[4] + 10) % 12];   //10%12 is effectively subtracting mids[0][4]
+  const cos = drawScale * (ca * sqrt3 + cb) / 2;
+  const sin = drawScale * (sa * sqrt3 + sb) / 2;
+  const dx =  drawScale * (sqrt3 * m[0] + m[1]) + drawWby2 + panX;
+  const dy =  drawScale * (sqrt3 * m[2] + m[3]) + drawHby2 + panY;
+  ctx.setTransform(cos, sin, -sin, cos, dx, dy);}
 
-  const a =  drawScale * cos;
-  const b =  drawScale * sin;
-  const c = -drawScale * sin;
-  const d =  drawScale * cos;
-  const e =  drawScale * (sqrt3 * m[0] + m[1]) + drawWby2 + panX;
-  const f =  drawScale * (sqrt3 * m[2] + m[3]) + drawHby2 + panY;
-
-  ctx.setTransform(a, b, c, d, e, f);
-}
+const blockedMids = Array(mids0L).fill(0); //Indicator of whether the edge has been paired (or blocked from getting more tiles on this edge in some way)
+const undoStack = [];
+let hoveredMidIdx = -1;
+let currentOptionIdx = 0;
+let isSyncing = false;
 
 function draw() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  for (let i = 0; i < mids.length; i += 4) {
+  for (let i = 0; i < mids.length; i += mids0L) {
     const m = mids[i];
     setMidTransform(m);
 
     ctx.fillStyle = typeof m[5] === 'string' ? m[5] : (SOME_COLORS[m[5]] || SOME_COLORS[0]);
-    //ctx.fillStyle = "#94a3b8";
-    //ctx.fillStyle = m[5];
     ctx.fill(pentagonPath);
     ctx.strokeStyle = '#1e293b';
     ctx.lineWidth = 0.5 / drawScale;
     ctx.stroke(pentagonPath);
 
-    // Draw letter at pentagon center
+    // Draw letter at pentagon center:
     ctx.fillStyle = '#1e293b';
     ctx.font = 'bold 2.0px sans-serif';
     ctx.textAlign = 'center';
@@ -216,9 +195,9 @@ canvas.addEventListener('mousemove', e => {
   const my = (e.clientY - rect.top  - drawHby2 - panY) / drawScale;
   let minDist = Infinity;
   let nearest = -1;
-  for (let i = 0; i < mids.length; i++) {if (blockedMids[i] === 1) continue;
+  for (let i = 0; i < mids.length; i++) {if (blockedMids[i] === 0) {
     const d = Math.hypot(mx - sqrt3 * mids[i][0] - mids[i][1], my - sqrt3 * mids[i][2] - mids[i][3]);
-    if (d < minDist) {minDist = d; nearest = i;}}
+    if (d < minDist) {minDist = d; nearest = i;}}}
   if (minDist < 6) {
     isPanning = false; //line is only for new pan capability
     if (hoveredMidIdx !== nearest) {
@@ -289,10 +268,10 @@ if (e.pointerType === 'touch') {e.preventDefault();
   //else {hoveredMidIdx = -1; draw();}
 }});
 
-function recordMove(m) {if (!m || !Array.isArray(m) || m.length !== 4) {alert('ERROR: expected a tile containing exactly 4 mids'); return;}
+function recordMove(m) {if (!m || !Array.isArray(m) || m.length !== mids0L) {alert('ERROR: expected a tile containing exactly' + mids0L + 'mids'); return;}
   const pairedIndices = [];
-  const newBlocked = new Array(m.length).fill(0);
-  for (let cIdx = 0; cIdx < m.length; cIdx++) {const cM = m[cIdx];
+  const newBlocked = Array(mids0L).fill(0);
+  for (let cIdx = 0; cIdx < mids0L; cIdx++) {const cM = m[cIdx];
   for (let i = 0; i < mids.length; i++) {const existing = mids[i];
       if (existing[0] === cM[0] && existing[1] === cM[1] && existing[2] === cM[2] && existing[3] === cM[3]) {
         if ((existing[4] - cM[4] + 12) % 12 !== 6) alert('ERROR: tile edges cross at indices ' + i + ' ' + (mids.length + cIdx));
@@ -320,7 +299,7 @@ function initPC(target, isInitiator) {
     if (pc.connectionState === 'failed') forgetPC(target);};
   pc.oniceconnectionstatechange = () => console.error('[ICE State - ' + target + ']', pc.iceConnectionState);
   pc.ontrack = e => {
-    //if (e.receiver) e.receiver.playoutDelayHint = 0; // Force minimal jitter buffer delay ****
+    if (e.receiver) e.receiver.playoutDelayHint = 0; // 6:01 PM 8/26/2026 forcing minimal jitter buffer delay ****
     let a = document.getElementById('audio_' + target) || document.createElement('audio');
     a.id = 'audio_' + target; a.autoplay = true;
     if (!a.parentNode) document.getElementById('audios').appendChild(a);
@@ -418,14 +397,14 @@ function doToggle() {if (hoveredMidIdx !== -1) {const candidates = getCandidates
 function undo() {
   if (undoStack.length === 0) return; isSyncing = false;
   const lastAction = undoStack.pop();
-  mids.length -= lastAction.numNewMids;
+  mids.length -= lastAction.numNewMids; blockedMids.length = mids.length;
   lastAction.pairedIndices.forEach(idx => {if (idx < mids.length) blockedMids[idx] = 0;});
   hoveredMidIdx = -1; draw();}
 
 function doReset() {if (confirm("Are you sure you want to clear the board for all connected players?")) {
-  mids.length = 4; for (let i = 0; i < mids.length; i++) {mids[i][5] = activeColor; mids[i][6] = activeText;}
-  blockedMids.length = 0; blockedMids.push(0, 0, 0, 0); undoStack.length = 0;
-  if (hoveredMidIdx >= 4) hoveredMidIdx = -1;
+  mids.length = mids0L; for (let i = 0; i < mids.length; i++) {mids[i][5] = activeColor; mids[i][6] = activeText;}
+  blockedMids.length = mids.length; blockedMids.fill(0); undoStack.length = 0;
+  if (hoveredMidIdx >= mids.length) hoveredMidIdx = -1;
   currentOptionIdx = 0; draw();
   const payload = JSON.stringify(mids);
   fetch(prefix + 'replace.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Reset Error: ' + err));}}
@@ -437,8 +416,7 @@ window.addEventListener('keydown', e => {
   else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyR') {e.preventDefault(); doReset();}});
 
 draw();
-loadBoard();
-poll(); //setInterval(poll, 1500);
+loadBoard(); poll(); //setInterval(poll, 1500);
 </script>
 </body>
 </html>
