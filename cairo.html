@@ -56,6 +56,7 @@ const gameDir = urlParams.get('g') ?? 'c';
 const movesQuery = '?file=' + gameDir + '/moves';
 const signalsQuerySlash = '?file=' + gameDir + '/s/';
 const peersDir = gameDir + '/p';
+const prefix = '/p@i@e@c@e@s/';
 const ID = activeColor.slice(1) + activeText.replace(/[^a-zA-Z0-9]/g, '');
 
 const canvas = document.getElementById('myCanvas');
@@ -319,6 +320,7 @@ function initPC(target, isInitiator) {
     if (pc.connectionState === 'failed') forgetPC(target);};
   pc.oniceconnectionstatechange = () => console.error('[ICE State - ' + target + ']', pc.iceConnectionState);
   pc.ontrack = e => {
+    //if (e.receiver) e.receiver.playoutDelayHint = 0; // Force minimal jitter buffer delay ****
     let a = document.getElementById('audio_' + target) || document.createElement('audio');
     a.id = 'audio_' + target; a.autoplay = true;
     if (!a.parentNode) document.getElementById('audios').appendChild(a);
@@ -354,13 +356,13 @@ const startVoice = async () => {
       else alert('ERROR: audio transceiver not yet enabled...must be mid-negotiation with ' + target);}
   } catch (err) { alert('Voice/Microphone Access Error: ' + err); }};
 
-const sendSig = (to, body) => fetch('/cgi-bin/append.sh' + signalsQuerySlash + to, { method: 'POST', body: JSON.stringify({ from: ID, ...body }) }).catch(err => console.warn('Send Signal Error: ' + err));
+const sendSig = (to, body) => fetch(prefix + 'append.sh' + signalsQuerySlash + to, { method: 'POST', body: JSON.stringify({ from: ID, ...body }) }).catch(err => console.warn('Send Signal Error: ' + err));
 
 
 const poll = async () => {
 //setInterval(async () => {
   try {
-    const sRes = await fetch('/cgi-bin/mv_rm.sh' + signalsQuerySlash + ID + '&peer=' + peersDir + '/' + ID, { cache: 'no-store' });
+    const sRes = await fetch(prefix + 'mv_rm.sh' + signalsQuerySlash + ID + '&peer=' + peersDir + '/' + ID, { cache: 'no-store' });
     if (sRes.ok) {const list = await sRes.json();
       for (const s of list) {if (!s.from || s.from === ID) continue;
         if (s.sdp && s.sdp.type === 'offer') forgetPC(s.from);
@@ -382,7 +384,7 @@ const poll = async () => {
           if (pc.remoteDescription) await pc.addIceCandidate(s.candidate).catch(err => console.warn('ICE add error: ' + err));
           else pc.iceQueue.push(s.candidate);}
     }}
-    const pRes = await fetch('/cgi-bin/ls.sh?file=' + peersDir, { cache: 'no-store' });  //NEW METHOD: returns a string which is comma-separated elements like bob,alice,134, (has ending comma; unique "empty list" response adds asterisk: *,)
+    const pRes = await fetch(prefix + 'ls.sh?file=' + peersDir, { cache: 'no-store' });  //NEW METHOD: returns a string which is comma-separated elements like bob,alice,134, (has ending comma; unique "empty list" response adds asterisk: *,)
     if (pRes.ok) {
       const peers = (await pRes.text()).split(','); if (peers.length < 3) console.warn('just me in peers (returns * if peersDir does not exist: seen once because peersDir maybe somehow got corrupted?): (' + peers[0] + ')');
       const last = peers.pop(); if (last !== '') alert('ERROR: peer name (' + last + ') without trailing comma');
@@ -393,7 +395,7 @@ const poll = async () => {
 //}, 1500);
 finally { setTimeout(poll, 1500); }};
 
-const loadBoard = () => fetch('/cgi-bin/cat.sh' + movesQuery, { cache: 'no-store' })
+const loadBoard = () => fetch(prefix + 'cat.sh' + movesQuery, { cache: 'no-store' })
   .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
   .then(mList => { mids.length = 0; blockedMids.length = 0; undoStack.length = 0; hoveredMidIdx = -1; currentOptionIdx = 0; isSyncing = true;
     mList.forEach(recordMove); draw();}).catch(err => console.warn('Load Board Error: ' + err));
@@ -407,7 +409,7 @@ function doPlace() {
   hoveredMidIdx = -1; draw();
   const payload = JSON.stringify(selected.mids);
   for (const target in dcs) {if (dcs[target].readyState === 'open') dcs[target].send(payload);}
-  if (isSyncing) {fetch('/cgi-bin/append.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Post Move Error: ' + err));}}
+  if (isSyncing) {fetch(prefix + 'append.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Post Move Error: ' + err));}}
 canvas.addEventListener('click', doPlace);
 
 function doToggle() {if (hoveredMidIdx !== -1) {const candidates = getCandidates(hoveredMidIdx);
@@ -420,13 +422,13 @@ function undo() {
   lastAction.pairedIndices.forEach(idx => {if (idx < mids.length) blockedMids[idx] = 0;});
   hoveredMidIdx = -1; draw();}
 
-async function doReset() {
+function doReset() {if (confirm("Are you sure you want to clear the board for all connected players?")) {
   mids.length = 4; for (let i = 0; i < mids.length; i++) {mids[i][5] = activeColor; mids[i][6] = activeText;}
   blockedMids.length = 0; blockedMids.push(0, 0, 0, 0); undoStack.length = 0;
   if (hoveredMidIdx >= 4) hoveredMidIdx = -1;
   currentOptionIdx = 0; draw();
   const payload = JSON.stringify(mids);
-  fetch('/cgi-bin/replace.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Reset Error: ' + err));}
+  fetch(prefix + 'replace.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Reset Error: ' + err));}}
 
 window.addEventListener('keydown', e => {
        if (e.code === 'Space') {e.preventDefault(); doToggle();}
