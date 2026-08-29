@@ -2,9 +2,10 @@
 <html>
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cairo Tiler</title>
   <style>
-    canvas { border: 1px solid #ccc; background: #fafafa; cursor: crosshair; }
+    canvas { border: 1px solid #ccc; background: #fafafa; cursor: crosshair; touch-action: pinch-zoom; }
     main { display: inline-flex; flex-direction: column; }
     .controls { display: flex; height: 48px; }
     .controls button { flex: 1; font-size: 16px; }
@@ -14,23 +15,24 @@
 <main>
   <canvas id="myCanvas" width="680" height="680"></canvas>
   <nav class="controls">
-    <button onclick="doToggle()"><b>Rotate</b><br>space</button>
+    <button onclick="doToggle(); draw();"><b>Rotate</b><br>space</button>
     <button onclick="doPlace()"><b>Place Tile</b><br>click</button>
     <button onclick="undo()"><b>Undo</b><br>backspace</button>
     <button onclick="doReset()"><b>Reset</b><br>ctrl-R</button>
-    <button onclick="loadBoard()"><b>Sync</b><br>ctrl-S</button>
-    <button onclick="startVoice()"><b>Mic</b><br>🎙️</button>
+    <button id="sBtn" onclick="loadBoard()"><b>Sync</b><br>S</button>
+    <button id="mBtn" onclick="toggleVoice()"><b>alone</b><br><span style="text-decoration: line-through 2px;">&nbsp;&#127908;&nbsp;</span></button>
   </nav>
 </main>
 <div id="audios"></div>
 <script>
 /*
+microphone symbols: &#127908, &#127897;&#65039;, 🎙
 <p><strong>Hover</strong> near the middle of <strong>long pentagon edges</strong> (the shorter pentagon edge can not be used) to preview snap options<br>
 <strong>Spacebar</strong> to toggle between the two placement options<br>
 <strong>Left Click</strong> to place the previewed tile<br>
 <strong>Backspace</strong> to Undo placements<br>
 <strong>Ctrl-R</strong> to Reset (removes all tiles and places one tile at origin)<br>
-<strong>Ctrl-S</strong> to Sync<br>
+<strong>S</strong> to Sync<br>
 <strong>Mic On</strong> to enable WebRTC voice
 */
 const SOME_COLORS = [
@@ -65,11 +67,16 @@ const ctx = canvas.getContext('2d');
 const pcs = {}, dcs = {};
 let stream;
 let forgetFailedPC = 1;
-window.addEventListener('beforeunload', (event) => {const hasActiveConnections = Object.keys(pcs).length > 0; if (hasActiveConnections) {event.preventDefault(); event.returnValue = '';}});
+window.addEventListener('beforeunload', (e) => {const hasActiveConnections = Object.keys(pcs).length > 0; if (hasActiveConnections) {e.preventDefault(); e.returnValue = '';}});
 
 const drawScale = 8;
+const drawScaleBy2 = drawScale * 0.5;
+const drawScale6 = drawScale * 6;
+
 const drawWby2 = canvas.width / 2;
 const drawHby2 = canvas.height / 2;
+
+
 
 const sqrt3 = Math.sqrt(3);
 const TRIG30 = [  // Exact trig components for k * 30 deg: [ca, cb, sa, sb]: 2*cos = ca*sqrt3+cb, 2*sin = sa*sqrt3+sb
@@ -123,40 +130,38 @@ const pentagonPath = new Path2D();            pentagonPath.moveTo(sqrt3 * baseVe
 for (let i = 1; i < baseVertices.length; i++) pentagonPath.lineTo(sqrt3 * baseVertices[i][0] + baseVertices[i][1], sqrt3 * baseVertices[i][2] + baseVertices[i][3]);
 pentagonPath.closePath();
 
-function getCandidates(targetIdx) {
-  const Et = mids[targetIdx];
+let isSyncing = false;
+
+let currentOptionIdx = 0;
+let hoveredMidIdx = -1;
+const candidates = [];
+
+function getCandidates() {
+  const Et = mids[hoveredMidIdx];
   const targetM = Et.slice(0, 4);
   const At = Et[4];
-  const targetPos = targetIdx % mids0L;
-  const candidates = [];
+  const targetPos = hoveredMidIdx % mids0L;
+  candidates.length = 0;
   for (let i = 0; i < mids0L; i++) {if (((targetPos % 2) !== (i % 2) && targetPos !== mids0Lm1 && i !== mids0Lm1)    ||    (targetPos === mids0Lm1 && i === mids0Lm1)) {
     const Ai = mids[i][4];
     const k = (At - Ai + 18) % 12;
     const candMidI = transformTuple(mids[i].slice(0, 4), k);
     const translation = subTuples(targetM, candMidI);
-
     const cMids = mids.slice(0, mids0L).map(bm => {
       const transformedM = addTuples(transformTuple(bm.slice(0, 4), k), translation);
       const nAngle = (bm[4] + k) % 12;
       return [...transformedM, nAngle, activeColor, activeText];});
+    candidates.push(cMids);}}
+  draw();}
 
-    candidates.push({ mids: cMids });}}
-  return candidates;}
-
-let panX = 0, panY = 0, startX = 0, startY = 0, isPanning = true; //line is only for new pan capability
+let panX = 0, panY = 0, startX = 0, startY = 0, isPanning = false; //line is only for new pan capability
 function setMidTransform(m) {
   const [ca, cb, sa, sb] = TRIG30[(m[4] + 10) % 12];   //10%12 is effectively subtracting mids[0][4]
-  const cos = drawScale * (ca * sqrt3 + cb) / 2;
-  const sin = drawScale * (sa * sqrt3 + sb) / 2;
+  const cos = drawScaleBy2 * (ca * sqrt3 + cb);
+  const sin = drawScaleBy2 * (sa * sqrt3 + sb);
   const dx =  drawScale * (sqrt3 * m[0] + m[1]) + drawWby2 + panX;
   const dy =  drawScale * (sqrt3 * m[2] + m[3]) + drawHby2 + panY;
   ctx.setTransform(cos, sin, -sin, cos, dx, dy);}
-
-const blockedMids = Array(mids0L).fill(0); //Indicator of whether the edge has been paired (or blocked from getting more tiles on this edge in some way)
-const undoStack = [];
-let hoveredMidIdx = -1;
-let currentOptionIdx = 0;
-let isSyncing = false;
 
 function draw() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -164,111 +169,54 @@ function draw() {
   for (let i = 0; i < mids.length; i += mids0L) {
     const m = mids[i];
     setMidTransform(m);
-
+    // Color outline and interior of pentagon:
     ctx.fillStyle = typeof m[5] === 'string' ? m[5] : (SOME_COLORS[m[5]] || SOME_COLORS[0]);
     ctx.fill(pentagonPath);
     ctx.strokeStyle = '#1e293b';
-    ctx.lineWidth = 0.5 / drawScale;
+    ctx.lineWidth = 0.0625;   // Use 0.5/drawScale for fine lines which doesn't thicken with drawScale (because the transform multiplies by drawScale to cancel its effect out for true width in mm)
     ctx.stroke(pentagonPath);
-
-    // Draw letter at pentagon center:
+    // Draw letters at pentagon center:
     ctx.fillStyle = '#1e293b';
     ctx.font = 'bold 2.0px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(m[6] ?? "", pentagonCenter[0], pentagonCenter[1]);}
-  if (hoveredMidIdx !== -1) {
-    const candidates = getCandidates(hoveredMidIdx);
-    if (candidates.length > 0) {
-      const cand = candidates[currentOptionIdx % candidates.length];
-      setMidTransform(cand.mids[0]);
+  if (hoveredMidIdx !== -1 && candidates.length > 0) {
+    const cand = candidates[currentOptionIdx % candidates.length];
+    setMidTransform(cand[0]);
     ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
     ctx.fill(pentagonPath);
     ctx.strokeStyle = '#2563eb';
-    ctx.lineWidth = 2.0 / drawScale;
-    ctx.stroke(pentagonPath);
-    }}}
+    ctx.lineWidth = 0.25; //****precalculate these floats //Use 2.0/drawScale for normal text which doesn't thicken with drawScale
+    ctx.stroke(pentagonPath);}}
 
-canvas.addEventListener('mousemove', e => {
+const blockedMids = Array(mids0L).fill(0); //Indicator of whether the edge has been paired (or blocked from getting more tiles on this edge in some way)
+const undoStack = [];
+
+function doToggle() {currentOptionIdx = (currentOptionIdx + 1) % candidates.length;}
+function getNearestEdge(e) {
   const rect = canvas.getBoundingClientRect();
-  const mx = (e.clientX - rect.left - drawWby2 - panX) / drawScale;
-  const my = (e.clientY - rect.top  - drawHby2 - panY) / drawScale;
-  let minDist = Infinity;
-  let nearest = -1;
+  const mx = (e.clientX - rect.left - drawWby2 - panX);
+  const my = (e.clientY - rect.top  - drawHby2 - panY);
+  let minDist = Infinity, nearest = -1;
   for (let i = 0; i < mids.length; i++) {if (blockedMids[i] === 0) {
-    const d = Math.hypot(mx - sqrt3 * mids[i][0] - mids[i][1], my - sqrt3 * mids[i][2] - mids[i][3]);
-    if (d < minDist) {minDist = d; nearest = i;}}}
-  if (minDist < 6) {
-    isPanning = false; //line is only for new pan capability
-    if (hoveredMidIdx !== nearest) {
-      hoveredMidIdx = nearest;
-      currentOptionIdx = 0;
-      draw();}
-    //else <--this line is the only differing line between mousemove (really designed for laptops with mouse/touchpad) and pointerdown listeners 
-  }
-  //else {hoveredMidIdx = -1; draw();}
-});
+      const d = Math.hypot(mx - drawScale * (sqrt3 * mids[i][0] + mids[i][1]), my - drawScale * (sqrt3 * mids[i][2] + mids[i][3]));
+      if (d < minDist) { minDist = d; nearest = i; }}}
+  return minDist < drawScale6 ? nearest : -1;}
+canvas.addEventListener('pointerdown', e => {const nearest = getNearestEdge(e); //pointerdown is only used for Tablet/Phone touch support: Tapping an edge sets target directly without intermediate hover jumps
+  if (nearest !== -1 && e.pointerType === 'touch') {isPanning = false; if (hoveredMidIdx !== nearest) {
+    e.preventDefault(); //GEMINI**** says I need this (but my thought was to not include it per note one line below): Suppresses synthetic click ONLY on initial selection
+    hoveredMidIdx = nearest; getCandidates();}} //for touchscreens: preventDefault (to avoid normal phone's panning, so that this site can instead use its own pan) should not be needed because CSS "touch-action: pinch-zoom;" is used
+  else {isPanning = true; if (hoveredMidIdx !== nearest) hoveredMidIdx = -1; startX = e.clientX; startY = e.clientY;}});
+canvas.addEventListener('pointermove', e => {if (!isPanning) {const nearest = getNearestEdge(e);
+  if (nearest !== -1 && hoveredMidIdx !== nearest) {hoveredMidIdx = nearest; getCandidates();}}});
+canvas.addEventListener('pointerup', e => {
+  if (isPanning) {isPanning = false;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    if (Math.hypot(dx, dy) > drawScale6) {panX += dx; panY += dy; hoveredMidIdx = -1; draw();}}});
 
-//block is only for new pan capability:
-canvas.addEventListener('pointerup', e => { if (isPanning) {
-  const dx = e.clientX - startX;
-  const dy = e.clientY - startY;
-  if (Math.hypot(dx, dy) > 6) {
-    panX += dx;
-    panY += dy;
-    wasDragged = true;
-    draw();
-  }}
-  else isPanning = true;
-});
-
-//Only for Tablet/Phone touch support: Tapping an edge sets target directly without intermediate hover jumps:
-canvas.addEventListener('pointerdown', e => {
-
-//block is only for new pan capability:
-if (hoveredMidIdx !== -1) {
-  const rect = canvas.getBoundingClientRect();
-  const mx = (e.clientX - rect.left - drawWby2 - panX) / drawScale;
-  const my = (e.clientY - rect.top  - drawHby2 - panY) / drawScale;
-  let minDist = Infinity;
-  let nearest = -1;
-  for (let i = 0; i < mids.length; i++) {if (blockedMids[i] === 1) continue;
-    const d = Math.hypot(mx - sqrt3 * mids[i][0] - mids[i][1], my - sqrt3 * mids[i][2] - mids[i][3]);
-    if (d < minDist) {minDist = d; nearest = i;}}
-  if (minDist < 6) {
-    isPanning = false; //line is only for new pan capability
-    //if (hoveredMidIdx !== nearest) {
-    //  hoveredMidIdx = nearest;
-    //  currentOptionIdx = 0;
-    //  draw();}
-    //else {currentOptionIdx = (currentOptionIdx + 1) % getCandidates(nearest).length; draw();} //Tapping the SAME edge again toggles placement option on touch
-  }
-  else {hoveredMidIdx = -1; isPanning = true;}
-}
-if (hoveredMidIdx === -1) {startX = e.clientX; startY = e.clientY;}
-
-
-if (e.pointerType === 'touch') {e.preventDefault();
-  const rect = canvas.getBoundingClientRect();
-  const mx = (e.clientX - rect.left - drawWby2 - panX) / drawScale;
-  const my = (e.clientY - rect.top  - drawHby2 - panY) / drawScale;
-  let minDist = Infinity;
-  let nearest = -1;
-  for (let i = 0; i < mids.length; i++) {if (blockedMids[i] === 1) continue;
-    const d = Math.hypot(mx - sqrt3 * mids[i][0] - mids[i][1], my - sqrt3 * mids[i][2] - mids[i][3]);
-    if (d < minDist) {minDist = d; nearest = i;}}
-  if (minDist < 6) {
-    isPanning = false; //line is only for new pan capability
-    if (hoveredMidIdx !== nearest) {
-      hoveredMidIdx = nearest;
-      currentOptionIdx = 0;
-      draw();}
-    else {currentOptionIdx = (currentOptionIdx + 1) % getCandidates(nearest).length; draw();} //Tapping the SAME edge again toggles placement option on touch
-  }
-  //else {hoveredMidIdx = -1; draw();}
-}});
-
-function recordMove(m) {if (!m || !Array.isArray(m) || m.length !== mids0L) {alert('ERROR: expected a tile containing exactly' + mids0L + 'mids'); return;}
+function recordMove(m) {if (!m || !Array.isArray(m) || m.length !== mids0L) {syncBtn.style.backgroundColor = '#fca5a5'; console.warn('WARNING: peer hit undo? sync probably needed (isSyncing=true so placing tiles on new tiles could register illegal moves at the server!): expected a tile containing exactly' + mids0L + 'mids'); return;} //****add isSyncing=false; ???
   const pairedIndices = [];
   const newBlocked = Array(mids0L).fill(0);
   for (let cIdx = 0; cIdx < mids0L; cIdx++) {const cM = m[cIdx];
@@ -283,6 +231,21 @@ function recordMove(m) {if (!m || !Array.isArray(m) || m.length !== mids0L) {ale
   mids.push(...m);
   blockedMids.push(...newBlocked);}
 
+const syncBtn = document.getElementById('sBtn');
+const micBtn = document.getElementById('mBtn');
+const audioCtx = new AudioContext();  //****ENTRY DING: will probably comment both lines out in future
+let isVoiceOn = false;
+let connectedPeerCount = 0;
+let peersL = 1; //this is "my total peers plus one", or "total peers including me", or "connectedPeerCount plus any unconnected or reconnected peers plus one"  //"ls.sh" below returns an ending blank item which adds one
+function updateMicButton() {if (isVoiceOn) micBtn.innerHTML = '<b>Mic to ' + connectedPeerCount + '/' + (peersL-1) + '</b><br>&nbsp;&#127908;&nbsp;';
+  else micBtn.innerHTML = '<b>muted to ' + connectedPeerCount + '/' + (peersL-1) + '</b><br><span style="text-decoration: line-through 2px;">&nbsp;&#127908;&nbsp;</span>';}
+function updateConnectedCount() {let count = 0; for (const target in pcs) if (pcs[target].connectionState === 'connected') count++;
+  if (connectedPeerCount < count) {
+    micBtn.style.backgroundColor = '#fca5a5'; setTimeout(() => { micBtn.style.backgroundColor = ''; }, 500);
+    const audioOsc = audioCtx.createOscillator(); audioOsc.connect(audioCtx.destination); audioOsc.start(); audioOsc.stop(audioCtx.currentTime + 0.15);  //****ENTRY DING: will probably comment both lines out in future
+  }
+  connectedPeerCount = count; updateMicButton();}
+
 function forgetPC(target) {if (forgetFailedPC > 0 && pcs[target]) {console.warn('[Teardown] Clearing dead connection for ' + target);
     pcs[target].close();
     delete pcs[target];
@@ -296,7 +259,7 @@ function initPC(target, isInitiator) {
   //const pc = pcs[target] = new RTCPeerConnection({ iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] });
   //const pc = pcs[target] = new RTCPeerConnection({ iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478', 'stun:stun.services.mozilla.com:3478'] }] });
   pc.onconnectionstatechange = () => {console.error('[Conn State - ' + target + ']', pc.connectionState);
-    if (pc.connectionState === 'failed') forgetPC(target);};
+    if (pc.connectionState === 'failed') forgetPC(target); updateConnectedCount();};
   pc.oniceconnectionstatechange = () => console.error('[ICE State - ' + target + ']', pc.iceConnectionState);
   pc.ontrack = e => {
     if (e.receiver) e.receiver.playoutDelayHint = 0; // 6:01 PM 8/26/2026 forcing minimal jitter buffer delay ****
@@ -312,12 +275,17 @@ function initPC(target, isInitiator) {
       catch (err) {alert('DataChannel Message Error: ' + err);}};
     dc.onclose = () => delete dcs[target];  //dc.onclose = () => { if (dcs[target] === dc) delete dcs[target]; }; //reconstructed dc is possible, but delete dcs is also done in the teardown
     dcs[target] = dc;};
-  if (isInitiator) {
-    const t = pc.addTransceiver('audio', { direction: 'sendrecv' });
+
+  //FASTEST****(4 total changes needed): comment out "if (isInitiator)" and its "else" lines below to force both branches (FASTEST = "perfect negotiation" to save one polling cycle: https://w3c.github.io/webrtc-pc/#perfect-negotiation-example)
+  if (isInitiator)
+    {const t = pc.addTransceiver('audio', { direction: 'sendrecv' });
     if (stream && stream.getAudioTracks()[0]) t.sender.replaceTrack(stream.getAudioTracks()[0]);
     attachDC(pc.createDataChannel('game'));
+    //below is the first request from either peer to any STUN server (the other peer, with higher ID, does this 1 polling cycle later since it intentionally delays until receiving the sdp offer):
     pc.createOffer().then(o => pc.setLocalDescription(o)).then(() => sendSig(target, { sdp: pc.localDescription })).catch(err => console.warn('Initial offer error:' + err));}
-  else {pc.ondatachannel = e => attachDC(e.channel);}
+  else
+    {pc.ondatachannel = e => attachDC(e.channel);}
+
   return pc;}
 
 const startVoice = async () => {
@@ -333,22 +301,39 @@ const startVoice = async () => {
         t.direction = 'sendrecv';
         t.sender.replaceTrack(audioTrack);}
       else alert('ERROR: audio transceiver not yet enabled...must be mid-negotiation with ' + target);}
-  } catch (err) { alert('Voice/Microphone Access Error: ' + err); }};
+      isVoiceOn = true;} catch (err) { alert('Voice/Microphone Access Error: ' + err); }};
+const stopVoice = () => {
+  if (stream) {stream.getAudioTracks().forEach(track => track.stop()); stream = null;}
+  for (const target in pcs) {const pc = pcs[target];
+    const t = pc.getTransceivers().find(tr => tr.receiver && tr.receiver.track && tr.receiver.track.kind === 'audio');
+    if (t && t.sender) {t.sender.replaceTrack(null).catch(err => alert('replaceTrack null error: ' + err));}}
+  isVoiceOn = false;};
+const toggleVoice = async () => {  //****not needed with 0.5s flash now used: if (micBtn.style.backgroundColor !== '') {micBtn.style.backgroundColor = ''; return;}
+  if (audioCtx.state === 'suspended') {audioCtx.resume(); console.log('AudioContext was suspended and has been resumed.');}
+  if (isVoiceOn) stopVoice();
+  else await startVoice();
+  updateMicButton();};
 
 const sendSig = (to, body) => fetch(prefix + 'append.sh' + signalsQuerySlash + to, { method: 'POST', body: JSON.stringify({ from: ID, ...body }) }).catch(err => console.warn('Send Signal Error: ' + err));
 
-
+let nextDelayDefault = 1500; //nextDelayDefault = 150000; in console will effectively stop polling for debugging
+let fastPollRemainingCount = 0;
 const poll = async () => {
-//setInterval(async () => {
   try {
     const sRes = await fetch(prefix + 'mv_rm.sh' + signalsQuerySlash + ID + '&peer=' + peersDir + '/' + ID, { cache: 'no-store' });
     if (sRes.ok) {const list = await sRes.json();
       for (const s of list) {if (!s.from || s.from === ID) continue;
-        if (s.sdp && s.sdp.type === 'offer') forgetPC(s.from);
+        if (s.sdp && s.sdp.type === 'offer') forgetPC(s.from); //FASTEST****(4 total changes needed): comment out this teardown since both sides intentionally then send offer
         const pc = pcs[s.from] || initPC(s.from, false);
         if (!pc.iceQueue) pc.iceQueue = [];
         if (s.sdp) {
           try {
+
+            //FASTEST****(4 total changes needed): uncomment one of the following lines to  (2nd line below is more official, 3rd line below with explicit close looks cleaner, but 1st line should suffice): 
+            //if (s.sdp.type === 'offer' && pc.signalingState !== 'stable') {if (ID < s.from) continue; await pc.setLocalDescription({ type: 'rollback' });}
+            //if (s.sdp.type === 'offer' && (pc.signalingState === 'have-local-offer' || pc.iceGatheringState !== 'new')) {if (ID < s.from) continue; if (pc.signalingState === 'have-local-offer') {await pc.setLocalDescription({ type: 'rollback' });}}
+            //if (s.sdp.type === 'offer' && pc.signalingState !== 'stable') {if (ID < s.from) continue; if (dcs[s.from]) dcs[s.from].close(); await pc.setLocalDescription({ type: 'rollback' });}
+
             await pc.setRemoteDescription(s.sdp);
             if (s.sdp.type === 'offer') {
               const t = pc.getTransceivers().find(tr => tr.receiver.track.kind === 'audio');
@@ -364,53 +349,53 @@ const poll = async () => {
           else pc.iceQueue.push(s.candidate);}
     }}
     const pRes = await fetch(prefix + 'ls.sh?file=' + peersDir, { cache: 'no-store' });  //NEW METHOD: returns a string which is comma-separated elements like bob,alice,134, (has ending comma; unique "empty list" response adds asterisk: *,)
-    if (pRes.ok) {
-      const peers = (await pRes.text()).split(','); if (peers.length < 3) console.warn('just me in peers (returns * if peersDir does not exist: seen once because peersDir maybe somehow got corrupted?): (' + peers[0] + ')');
+    if (pRes.ok) {const peers = (await pRes.text()).split(',');
+      const peersLnew = peers.length; if (peersLnew < 3) console.warn('just me in peers (returns * if peersDir does not exist; also seen on rare occasion when Segmentation Fault occurs during sed string sterilization, causing no_file): (' + peers[0] + ')');
       const last = peers.pop(); if (last !== '') alert('ERROR: peer name (' + last + ') without trailing comma');
       for (const target of peers) {
-        if (target.length < 6) alert('ERROR: peer name (' + target + ') should start with 6 color characters');
-        else if (target !== ID && !pcs[target] && ID < target) initPC(target, true); }}
+        if (target.length < 6) console.error('ERROR: peer name (' + target + ') should start with 6 color characters, but returns * if peersDir does not exist (which occurs on rare occasion when Segmentation Fault occurs during sed string sterilization, causing no_file)');
+        else if (ID !== target && !pcs[target]) {
+          if (ID < target)  //FASTEST****(4 total changes needed): comment this "if (ID < target)" requirement out (and remove the entire else clause out so we never change nextDelay), so both peers initiate (and thereby get ICE candidates immediately, which is the whole point of "FASTEST") simultaneously
+            initPC(target, true);
+          else if (peersL < peersLnew) fastPollRemainingCount = 6;
+        }}
+      peersL = peersLnew;}
   } catch (err) { console.warn('Signaling Loop Error: ' + err); }
-//}, 1500);
-finally { setTimeout(poll, 1500); }};
+finally { if (fastPollRemainingCount > 0) {fastPollRemainingCount--; setTimeout(poll, 300);} else {setTimeout(poll, nextDelayDefault);} }};
 
 const loadBoard = () => fetch(prefix + 'cat.sh' + movesQuery, { cache: 'no-store' })
   .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
-  .then(mList => { mids.length = 0; blockedMids.length = 0; undoStack.length = 0; hoveredMidIdx = -1; currentOptionIdx = 0; isSyncing = true;
+  .then(mList => { mids.length = 0; blockedMids.length = 0; undoStack.length = 0; hoveredMidIdx = -1; isSyncing = true; syncBtn.style.backgroundColor = '';
     mList.forEach(recordMove); draw();}).catch(err => console.warn('Load Board Error: ' + err));
 
-function doPlace() {
-  if (hoveredMidIdx === -1) return;
-  const candidates = getCandidates(hoveredMidIdx);
-  if (candidates.length === 0) return;
+function doPlace() {if (hoveredMidIdx !== -1 && candidates.length > 0) {
   const selected = candidates[currentOptionIdx % candidates.length];
-  recordMove(selected.mids);
+  recordMove(selected);
   hoveredMidIdx = -1; draw();
-  const payload = JSON.stringify(selected.mids);
-  for (const target in dcs) {if (dcs[target].readyState === 'open') dcs[target].send(payload);}
+  const payload = JSON.stringify(selected); for (const target in dcs) {if (dcs[target].readyState === 'open') dcs[target].send(payload);}
   if (isSyncing) {fetch(prefix + 'append.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Post Move Error: ' + err));}}
+else doToggle();} //to help touchscreen case, let's toggle whenever no tile was placable
 canvas.addEventListener('click', doPlace);
 
-function doToggle() {if (hoveredMidIdx !== -1) {const candidates = getCandidates(hoveredMidIdx);
-  if (candidates.length > 0) {currentOptionIdx = (currentOptionIdx + 1) % candidates.length; draw();}}}
-
-function undo() {
-  if (undoStack.length === 0) return; isSyncing = false;
+function undo() {if (undoStack.length !== 0) {  //****undo feature currently stops sending moves to server, but will send subsequent moves to peers as a spectator mode?  change tile color?
+  isSyncing = false; syncBtn.style.backgroundColor = '#fca5a5';
   const lastAction = undoStack.pop();
   mids.length -= lastAction.numNewMids; blockedMids.length = mids.length;
   lastAction.pairedIndices.forEach(idx => {if (idx < mids.length) blockedMids[idx] = 0;});
-  hoveredMidIdx = -1; draw();}
+  hoveredMidIdx = -1; draw();
+  const payload = JSON.stringify([]); for (const target in dcs) {if (dcs[target].readyState === 'open') dcs[target].send(payload);} //send empty move to peers to make their Sync buttons red (since moves I now make that they receive are not officially being registered)
+}}
 
 function doReset() {if (confirm("Are you sure you want to clear the board for all connected players?")) {
   mids.length = mids0L; for (let i = 0; i < mids.length; i++) {mids[i][5] = activeColor; mids[i][6] = activeText;}
   blockedMids.length = mids.length; blockedMids.fill(0); undoStack.length = 0;
   if (hoveredMidIdx >= mids.length) hoveredMidIdx = -1;
-  currentOptionIdx = 0; draw();
+  syncBtn.style.backgroundColor = ''; draw();
   const payload = JSON.stringify(mids);
   fetch(prefix + 'replace.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Reset Error: ' + err));}}
 
 window.addEventListener('keydown', e => {
-       if (e.code === 'Space') {e.preventDefault(); doToggle();}
+       if (e.code === 'Space') {e.preventDefault(); doToggle(); draw();}
   else if (e.code === 'KeyS')  {e.preventDefault(); loadBoard();}
   else if (e.code === 'KeyU' || e.code === 'Backspace')   {e.preventDefault(); undo();}
   else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyR') {e.preventDefault(); doReset();}});
