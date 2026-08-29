@@ -15,7 +15,7 @@
 <main>
   <canvas id="myCanvas" width="680" height="680"></canvas>
   <nav class="controls">
-    <button onclick="doToggle(); draw();"><b>Rotate</b><br>space</button>
+    <button onclick="doToggle()"><b>Rotate</b><br>space</button>
     <button onclick="doPlace()"><b>Place Tile</b><br>click</button>
     <button onclick="undo()"><b>Undo</b><br>backspace</button>
     <button onclick="doReset()"><b>Reset</b><br>ctrl-R</button>
@@ -25,16 +25,6 @@
 </main>
 <div id="audios"></div>
 <script>
-/*
-microphone symbols: &#127908, &#127897;&#65039;, 🎙
-<p><strong>Hover</strong> near the middle of <strong>long pentagon edges</strong> (the shorter pentagon edge can not be used) to preview snap options<br>
-<strong>Spacebar</strong> to toggle between the two placement options<br>
-<strong>Left Click</strong> to place the previewed tile<br>
-<strong>Backspace</strong> to Undo placements<br>
-<strong>Ctrl-R</strong> to Reset (removes all tiles and places one tile at origin)<br>
-<strong>S</strong> to Sync<br>
-<strong>Mic On</strong> to enable WebRTC voice
-*/
 const SOME_COLORS = [
   "#06b6d4", // Bright Cyan
   "#16a34a", // Emerald Green
@@ -79,7 +69,7 @@ const drawHby2 = canvas.height / 2;
 
 
 const sqrt3 = Math.sqrt(3);
-const TRIG30 = [  // Exact trig components for k * 30 deg: [ca, cb, sa, sb]: 2*cos = ca*sqrt3+cb, 2*sin = sa*sqrt3+sb
+const TRIG30 = [  //Exact trig components for k * 30 deg: [ca, cb, sa, sb]: 2*cos = ca*sqrt3+cb, 2*sin = sa*sqrt3+sb
   [ 0, 2,  0, 0], //   0 deg
   [ 1, 0,  0, 1], //  30
   [ 0, 1,  1, 0], //  60
@@ -154,9 +144,9 @@ function getCandidates() {
     candidates.push(cMids);}}
   draw();}
 
-let panX = 0, panY = 0, startX = 0, startY = 0, isPanning = false; //line is only for new pan capability
+let panX = 0, panY = 0, startX = 0, startY = 0, isPanning = false;
 function setMidTransform(m) {
-  const [ca, cb, sa, sb] = TRIG30[(m[4] + 10) % 12];   //10%12 is effectively subtracting mids[0][4]
+  const [ca, cb, sa, sb] = TRIG30[(m[4] + 10) % 12];   //10%12 is effectively subtracting mids[0][4] but fastest to hard code the number
   const cos = drawScaleBy2 * (ca * sqrt3 + cb);
   const sin = drawScaleBy2 * (sa * sqrt3 + sb);
   const dx =  drawScale * (sqrt3 * m[0] + m[1]) + drawWby2 + panX;
@@ -166,34 +156,28 @@ function setMidTransform(m) {
 function draw() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  for (let i = 0; i < mids.length; i += mids0L) {
-    const m = mids[i];
-    setMidTransform(m);
-    // Color outline and interior of pentagon:
+  for (let i = 0; i < mids.length; i += mids0L) {const m = mids[i]; setMidTransform(m);
     ctx.fillStyle = typeof m[5] === 'string' ? m[5] : (SOME_COLORS[m[5]] || SOME_COLORS[0]);
     ctx.fill(pentagonPath);
     ctx.strokeStyle = '#1e293b';
     ctx.lineWidth = 0.0625;   // Use 0.5/drawScale for fine lines which doesn't thicken with drawScale (because the transform multiplies by drawScale to cancel its effect out for true width in mm)
     ctx.stroke(pentagonPath);
-    // Draw letters at pentagon center:
     ctx.fillStyle = '#1e293b';
     ctx.font = 'bold 2.0px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(m[6] ?? "", pentagonCenter[0], pentagonCenter[1]);}
-  if (hoveredMidIdx !== -1 && candidates.length > 0) {
-    const cand = candidates[currentOptionIdx % candidates.length];
-    setMidTransform(cand[0]);
+  if (hoveredMidIdx !== -1 && candidates.length > 0) {const cand = candidates[currentOptionIdx % candidates.length]; setMidTransform(cand[0]);
     ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
     ctx.fill(pentagonPath);
     ctx.strokeStyle = '#2563eb';
-    ctx.lineWidth = 0.25; //****precalculate these floats //Use 2.0/drawScale for normal text which doesn't thicken with drawScale
+    ctx.lineWidth = 0.25; //Use 2.0/drawScale for normal text which doesn't thicken with drawScale
     ctx.stroke(pentagonPath);}}
 
 const blockedMids = Array(mids0L).fill(0); //Indicator of whether the edge has been paired (or blocked from getting more tiles on this edge in some way)
 const undoStack = [];
 
-function doToggle() {currentOptionIdx = (currentOptionIdx + 1) % candidates.length;}
+function doToggle() {currentOptionIdx = (currentOptionIdx + 1) % candidates.length; draw();}
 function getNearestEdge(e) {
   const rect = canvas.getBoundingClientRect();
   const mx = (e.clientX - rect.left - drawWby2 - panX);
@@ -203,9 +187,9 @@ function getNearestEdge(e) {
       const d = Math.hypot(mx - drawScale * (sqrt3 * mids[i][0] + mids[i][1]), my - drawScale * (sqrt3 * mids[i][2] + mids[i][3]));
       if (d < minDist) { minDist = d; nearest = i; }}}
   return minDist < drawScale6 ? nearest : -1;}
-canvas.addEventListener('pointerdown', e => {const nearest = getNearestEdge(e); //pointerdown is only used for Tablet/Phone touch support: Tapping an edge sets target directly without intermediate hover jumps
+canvas.addEventListener('pointerdown', e => {const nearest = getNearestEdge(e); //Website needs to best support desktops (with a mouse) and laptops (with a trackpad).  Smartphones and other touchscreens also must be supported, but the methods for toggling rotation candidates and placing tiles may be awkward.
   if (nearest !== -1 && e.pointerType === 'touch') {isPanning = false; if (hoveredMidIdx !== nearest) {
-    e.preventDefault(); //GEMINI**** says I need this (but my thought was to not include it per note one line below): Suppresses synthetic click ONLY on initial selection
+    //3:39 AM 8/29/2026 added draw to doToggle and commented this out to see if it works better for touchscreen: e.preventDefault(); //GEMINI**** says I need this (but my thought was to not include it per note one line below): Suppresses synthetic click ONLY on initial selection
     hoveredMidIdx = nearest; getCandidates();}} //for touchscreens: preventDefault (to avoid normal phone's panning, so that this site can instead use its own pan) should not be needed because CSS "touch-action: pinch-zoom;" is used
   else {isPanning = true; if (hoveredMidIdx !== nearest) hoveredMidIdx = -1; startX = e.clientX; startY = e.clientY;}});
 canvas.addEventListener('pointermove', e => {if (!isPanning) {const nearest = getNearestEdge(e);
@@ -216,7 +200,7 @@ canvas.addEventListener('pointerup', e => {
     const dy = e.clientY - startY;
     if (Math.hypot(dx, dy) > drawScale6) {panX += dx; panY += dy; hoveredMidIdx = -1; draw();}}});
 
-function recordMove(m) {if (!m || !Array.isArray(m) || m.length !== mids0L) {syncBtn.style.backgroundColor = '#fca5a5'; console.warn('WARNING: peer hit undo? sync probably needed (isSyncing=true so placing tiles on new tiles could register illegal moves at the server!): expected a tile containing exactly' + mids0L + 'mids'); return;} //****add isSyncing=false; ???
+function recordMove(m) {if (!m || !Array.isArray(m) || m.length !== mids0L) {syncBtn.style.backgroundColor = '#fca5a5'; console.warn('WARNING: peer hit undo? sync probably needed (isSyncing=true so placing tiles on new tiles could register illegal moves at the server!): expected a tile containing exactly' + mids0L + 'mids'); return;} //In the future, I might add "isSyncing=false" here for a different undo saving method ****
   const pairedIndices = [];
   const newBlocked = Array(mids0L).fill(0);
   for (let cIdx = 0; cIdx < mids0L; cIdx++) {const cM = m[cIdx];
@@ -233,16 +217,16 @@ function recordMove(m) {if (!m || !Array.isArray(m) || m.length !== mids0L) {syn
 
 const syncBtn = document.getElementById('sBtn');
 const micBtn = document.getElementById('mBtn');
-const audioCtx = new AudioContext();  //****ENTRY DING: will probably comment both lines out in future
+//const audioCtx = new AudioContext();  //****ENTRY DING: for some reason the Android phone with Firefox dings occasionally when it seems like count does not increase, so just commenting out this feature since these random noises can be distracting anyway
 let isVoiceOn = false;
 let connectedPeerCount = 0;
-let peersL = 1; //this is "my total peers plus one", or "total peers including me", or "connectedPeerCount plus any unconnected or reconnected peers plus one"  //"ls.sh" below returns an ending blank item which adds one
-function updateMicButton() {if (isVoiceOn) micBtn.innerHTML = '<b>Mic to ' + connectedPeerCount + '/' + (peersL-1) + '</b><br>&nbsp;&#127908;&nbsp;';
-  else micBtn.innerHTML = '<b>muted to ' + connectedPeerCount + '/' + (peersL-1) + '</b><br><span style="text-decoration: line-through 2px;">&nbsp;&#127908;&nbsp;</span>';}
+let peersL = 2; //this is "my total peers plus two", or "total peers including me plus one", or "connectedPeerCount plus any unconnected plus any reloaded peer multiplicty plus me plus one"  //"ls.sh" below returns my own peer ID plus an ending blank item which together add two
+function updateMicButton() {if (isVoiceOn) micBtn.innerHTML = '<b>Mic to ' + connectedPeerCount + '/' + (peersL-2) + '</b><br>&nbsp;&#127908;&nbsp;';
+  else micBtn.innerHTML = '<b>muted to ' + connectedPeerCount + '/' + (peersL-2) + '</b><br><span style="text-decoration: line-through 2px;">&nbsp;&#127908;&nbsp;</span>';}
 function updateConnectedCount() {let count = 0; for (const target in pcs) if (pcs[target].connectionState === 'connected') count++;
   if (connectedPeerCount < count) {
-    micBtn.style.backgroundColor = '#fca5a5'; setTimeout(() => { micBtn.style.backgroundColor = ''; }, 500);
-    const audioOsc = audioCtx.createOscillator(); audioOsc.connect(audioCtx.destination); audioOsc.start(); audioOsc.stop(audioCtx.currentTime + 0.15);  //****ENTRY DING: will probably comment both lines out in future
+    micBtn.style.backgroundColor = '#fca5a5'; setTimeout(() => { micBtn.style.backgroundColor = ''; }, 1000);
+    //const audioOsc = audioCtx.createOscillator(); audioOsc.connect(audioCtx.destination); audioOsc.start(); audioOsc.stop(audioCtx.currentTime + 0.15);  //****ENTRY DING
   }
   connectedPeerCount = count; updateMicButton();}
 
@@ -254,7 +238,6 @@ function forgetPC(target) {if (forgetFailedPC > 0 && pcs[target]) {console.warn(
 
 function initPC(target, isInitiator) {
   if (!target || pcs[target]) return pcs[target];
-  //const pc = pcs[target] = new RTCPeerConnection();
   const pc = pcs[target] = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun1.l.google.com:19302' }] });
   //const pc = pcs[target] = new RTCPeerConnection({ iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] });
   //const pc = pcs[target] = new RTCPeerConnection({ iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478', 'stun:stun.services.mozilla.com:3478'] }] });
@@ -308,8 +291,8 @@ const stopVoice = () => {
     const t = pc.getTransceivers().find(tr => tr.receiver && tr.receiver.track && tr.receiver.track.kind === 'audio');
     if (t && t.sender) {t.sender.replaceTrack(null).catch(err => alert('replaceTrack null error: ' + err));}}
   isVoiceOn = false;};
-const toggleVoice = async () => {  //****not needed with 0.5s flash now used: if (micBtn.style.backgroundColor !== '') {micBtn.style.backgroundColor = ''; return;}
-  if (audioCtx.state === 'suspended') {audioCtx.resume(); console.log('AudioContext was suspended and has been resumed.');}
+const toggleVoice = async () => {  //****not needed with 1.0s flash now used: if (micBtn.style.backgroundColor !== '') {micBtn.style.backgroundColor = ''; return;}
+  //if (audioCtx.state === 'suspended') {audioCtx.resume(); console.log('AudioContext was suspended and has been resumed.');}  //****ENTRY DING
   if (isVoiceOn) stopVoice();
   else await startVoice();
   updateMicButton();};
@@ -362,6 +345,7 @@ const poll = async () => {
       peersL = peersLnew;}
   } catch (err) { console.warn('Signaling Loop Error: ' + err); }
 finally { if (fastPollRemainingCount > 0) {fastPollRemainingCount--; setTimeout(poll, 300);} else {setTimeout(poll, nextDelayDefault);} }};
+//****How do I check if temporary 300ms is helping?
 
 const loadBoard = () => fetch(prefix + 'cat.sh' + movesQuery, { cache: 'no-store' })
   .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
@@ -376,8 +360,10 @@ function doPlace() {if (hoveredMidIdx !== -1 && candidates.length > 0) {
   if (isSyncing) {fetch(prefix + 'append.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Post Move Error: ' + err));}}
 else doToggle();} //to help touchscreen case, let's toggle whenever no tile was placable
 canvas.addEventListener('click', doPlace);
+////****I could add console diagnostics to catch click, pointerdown, pointerup, pointercancel like the following, but it gets complicated to view the console on a mobile phone, so I'd rather just flash some button when these events occur:
+//canvas.addEventListener('click', e => {console.log('CLICK', e.pointerType, e.timeStamp, e); doPlace();});
 
-function undo() {if (undoStack.length !== 0) {  //****undo feature currently stops sending moves to server, but will send subsequent moves to peers as a spectator mode?  change tile color?
+function undo() {if (undoStack.length !== 0) {  //undo feature currently stops sending moves to server, but will send subsequent moves to peers as a spectator mode (but peers still get their moves saved to game, so this feature is not so useful as it is now)
   isSyncing = false; syncBtn.style.backgroundColor = '#fca5a5';
   const lastAction = undoStack.pop();
   mids.length -= lastAction.numNewMids; blockedMids.length = mids.length;
@@ -395,13 +381,13 @@ function doReset() {if (confirm("Are you sure you want to clear the board for al
   fetch(prefix + 'replace.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Reset Error: ' + err));}}
 
 window.addEventListener('keydown', e => {
-       if (e.code === 'Space') {e.preventDefault(); doToggle(); draw();}
+       if (e.code === 'Space') {e.preventDefault(); doToggle();}
   else if (e.code === 'KeyS')  {e.preventDefault(); loadBoard();}
   else if (e.code === 'KeyU' || e.code === 'Backspace')   {e.preventDefault(); undo();}
   else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyR') {e.preventDefault(); doReset();}});
 
 draw();
-loadBoard(); poll(); //setInterval(poll, 1500);
+loadBoard(); poll();
 </script>
 </body>
 </html>
