@@ -7,8 +7,10 @@
   <style>
     canvas { border: 1px solid #ccc; background: #fafafa; cursor: crosshair; touch-action: pinch-zoom; }
     main { display: inline-flex; flex-direction: column; }
+    body { display: flex; align-items: stretch; gap: 8px; margin: 8px; }
     .controls { display: flex; height: 48px; }
     .controls button { flex: 1; font-size: 16px; }
+    #wideBox { text-align: center; font-size: 36px; font-weight: bold; line-height: 1.2; resize: vertical; border: none; }
   </style>
 </head>
 <body>
@@ -22,6 +24,7 @@
     <button id="sBtn" onclick="loadBoard()"><b>Sync</b><br>S</button>
     <button id="mBtn" onclick="toggleVoice()"><b>alone</b><br><span style="text-decoration: line-through 2px;">&nbsp;&#127908;&nbsp;</span></button>
   </nav>
+  <textarea id="wideBox" rows="4"></textarea>
 </main>
 <div id="audios"></div>
 <script>
@@ -59,14 +62,12 @@ let stream;
 let forgetFailedPC = 1;
 window.addEventListener('beforeunload', (e) => {const hasActiveConnections = Object.keys(pcs).length > 0; if (hasActiveConnections) {e.preventDefault(); e.returnValue = '';}});
 
-const drawScale = 8;
+const drawScale = 3;
 const drawScaleBy2 = drawScale * 0.5;
-const drawScale6 = drawScale * 6;
+const previewScale = drawScale * 12;
 
 const drawWby2 = canvas.width / 2;
 const drawHby2 = canvas.height / 2;
-
-
 
 const sqrt3 = Math.sqrt(3);
 const TRIG30 = [  //Exact trig components for k * 30 deg: [ca, cb, sa, sb]: 2*cos = ca*sqrt3+cb, 2*sin = sa*sqrt3+sb
@@ -84,7 +85,7 @@ const TRIG30 = [  //Exact trig components for k * 30 deg: [ca, cb, sa, sb]: 2*co
   [ 1, 0,  0,-1]  // 330
 ];
 
-const mids = [  //Master list of edge midpoints: [ax, bx, ay, by, angle_idx, playerColor, playerText]: "Cairo Pentagon": all edge lengths are 4 except the "final closing edge" which is (4-4*sqrt3)
+const mids = [  //Master list of edge midpoints: [ax, bx, ay, by, angle_idx, playerColor, playerText]: "Cairo Pentagon": all edge lengths are 4 except the "final closing edge" which is (4*sqrt3-4) BUT MULTIPLIED BY 3 LATER TO CLEAR FRACTIONS FOR BEST EDGE-CROSSING DETECTION 2:53 AM 8/31/2026
   [ 2, -1,     1, 0,      2,      activeColor, activeText],
   [ 1,  0,     2, 1,      5,      activeColor, activeText],
   [-1,  0,     2, 1,      7,      activeColor, activeText],
@@ -96,23 +97,27 @@ const mids = [  //Master list of edge midpoints: [ax, bx, ay, by, angle_idx, pla
 const origin = mids[0].slice(0, 4);
 mids.forEach(row => { for (let i = 0; i < 4; i++) row[i] -= origin[i]; });
 
-function addTuples(t1, t2) { return [t1[0] + t2[0], t1[1] + t2[1], t1[2] + t2[2], t1[3] + t2[3]]; }
-function subTuples(t1, t2) { return [t1[0] - t2[0], t1[1] - t2[1], t1[2] - t2[2], t1[3] - t2[3]]; }
-function transformTuple(pt, k) {
-  let ax = pt[0], bx = pt[1], ay = pt[2], by = pt[3];
-  const [ca, cb, sa, sb] = TRIG30[k];
+
+const addTuplesXY = (t1, t2) => [t1[0] + t2[0], t1[1] + t2[1], t1[2] + t2[2], t1[3] + t2[3]];
+const subTuplesXY = (t1, t2) => [t1[0] - t2[0], t1[1] - t2[1], t1[2] - t2[2], t1[3] - t2[3]];
+const transformTupleXY = (t1, ang) => {
+  const [ax, bx, ay, by] = t1;
+  const [ca, cb, sa, sb] = TRIG30[ang];
   return [
     ((ax * cb + bx * ca) - (ay * sb + by * sa)) / 2,
     ((3 * ax * ca + bx * cb) - (3 * ay * sa + by * sb)) / 2,
     ((ax * sb + bx * sa) + (ay * cb + by * ca)) / 2,
     ((3 * ax * sa + bx * sb) + (3 * ay * ca + by * cb)) / 2
-  ];
-}
+  ];}
 
 const mids0L = mids.length;
 const mids0Lm1 = mids0L - 1;
-const baseVertices = [ ...mids.slice(0, mids0Lm1).map(m => subTuples(m, TRIG30[m[4]])),
-  addTuples(mids[mids0L - 2], TRIG30[mids[mids0L - 2][4]]) ];
+const baseVertices = [ ...mids.slice(0, mids0Lm1).map(m => subTuplesXY(m, TRIG30[m[4]])),
+  addTuplesXY(mids[mids0L - 2], TRIG30[mids[mids0L - 2][4]]) ];
+
+//2:02 AM 8/31/2026 now scaling lengths 3x for integer edge-crossig lengths: four lenghts of 12 and one length of 12*(sqrt3-1):
+mids.forEach(        row => { for (let i = 0; i < 4; i++) row[i] *= 3; });
+baseVertices.forEach(row => { for (let i = 0; i < 4; i++) row[i] *= 3; });
 
 // Build reusable Path2D from baseVertices:
 const pentagonCenter = baseVertices.reduce((acc, v) => [acc[0] + sqrt3 * v[0] + v[1], acc[1] + sqrt3 * v[2] + v[3]], [0, 0]).map(c => c / baseVertices.length);
@@ -126,19 +131,17 @@ let currentOptionIdx = 0;
 let hoveredMidIdx = -1;
 const candidates = [];
 
-function getCandidates() {
-  const Et = mids[hoveredMidIdx];
-  const targetM = Et.slice(0, 4);
-  const At = Et[4];
+function getCandidates() {const mid0 = mids[hoveredMidIdx];
+  const mid0just4 = mid0.slice(0, 4);
+  const ang0 = mid0[4];
   const targetPos = hoveredMidIdx % mids0L;
   candidates.length = 0;
   for (let i = 0; i < mids0L; i++) {if (((targetPos % 2) !== (i % 2) && targetPos !== mids0Lm1 && i !== mids0Lm1)    ||    (targetPos === mids0Lm1 && i === mids0Lm1)) {
-    const Ai = mids[i][4];
-    const k = (At - Ai + 18) % 12;
-    const candMidI = transformTuple(mids[i].slice(0, 4), k);
-    const translation = subTuples(targetM, candMidI);
+    const k = (ang0 - mids[i][4] + 18) % 12;
+    const candMidI = transformTupleXY(mids[i].slice(0, 4), k);
+    const translation = subTuplesXY(mid0just4, candMidI);
     const cMids = mids.slice(0, mids0L).map(bm => {
-      const transformedM = addTuples(transformTuple(bm.slice(0, 4), k), translation);
+      const transformedM = addTuplesXY(transformTupleXY(bm.slice(0, 4), k), translation);
       const nAngle = (bm[4] + k) % 12;
       return [...transformedM, nAngle, activeColor, activeText];});
     candidates.push(cMids);}}
@@ -153,81 +156,215 @@ function setMidTransform(m) {
   const dy =  drawScale * (sqrt3 * m[2] + m[3]) + drawHby2 + panY;
   ctx.setTransform(cos, sin, -sin, cos, dx, dy);}
 
+let midsLast = 0;
 function draw() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  for (let i = 0; i < mids.length; i += mids0L) {const m = mids[i]; setMidTransform(m);
+  let i = 0;
+  while (i < midsLast) {const m = mids[i]; setMidTransform(m);
     ctx.fillStyle = typeof m[5] === 'string' ? m[5] : (SOME_COLORS[m[5]] || SOME_COLORS[0]);
     ctx.fill(pentagonPath);
     ctx.strokeStyle = '#1e293b';
-    ctx.lineWidth = 0.0625;   // Use 0.5/drawScale for fine lines which doesn't thicken with drawScale (because the transform multiplies by drawScale to cancel its effect out for true width in mm)
+    ctx.lineWidth = 0.25;   // Use 0.5/drawScale for fine lines which doesn't thicken with drawScale (because the transform multiplies by drawScale to cancel its effect out for true width in mm)
     ctx.stroke(pentagonPath);
     ctx.fillStyle = '#1e293b';
-    ctx.font = 'bold 2.0px sans-serif';
+    ctx.font = 'bold ' + 16/drawScale + 'px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(m[6] ?? "", pentagonCenter[0], pentagonCenter[1]);}
+    ctx.fillText(m[6] ?? "", pentagonCenter[0], pentagonCenter[1]);
+    i += mids0L;}
+ while (i < mids.length) {const m = mids[i]; setMidTransform(m);  //HOW CAN I MAKE THIS LOOP'S TILES LOOK DIFFERENT???
+    ctx.fillStyle = typeof m[5] === 'string' ? m[5] : (SOME_COLORS[m[5]] || SOME_COLORS[0]);
+    ctx.fill(pentagonPath);
+    ctx.strokeStyle = '#f59e0b';  // Gold accent color
+    ctx.lineWidth = 0.75;       // 3x thicker than base
+    ctx.stroke(pentagonPath);
+    ctx.fillStyle = '#f59e0b';    // Gold accent color
+    ctx.font = 'bold ' + 16/drawScale + 'px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(m[6] ?? "", pentagonCenter[0], pentagonCenter[1]);
+    i += mids0L;}
   if (hoveredMidIdx !== -1 && candidates.length > 0) {const cand = candidates[currentOptionIdx % candidates.length]; setMidTransform(cand[0]);
     ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
     ctx.fill(pentagonPath);
     ctx.strokeStyle = '#2563eb';
-    ctx.lineWidth = 0.25; //Use 2.0/drawScale for normal text which doesn't thicken with drawScale
+    ctx.lineWidth = 0.75; //Use 2.0/drawScale for normal text which doesn't thicken with drawScale
     ctx.stroke(pentagonPath);}}
 
 const blockedMids = Array(mids0L).fill(0); //Indicator of whether the edge has been paired (or blocked from getting more tiles on this edge in some way)
-const undoStack = [];
 
-function doToggle() {currentOptionIdx = (currentOptionIdx + 1) % candidates.length; draw();}
-function getNearestEdge(e) {
+const fmtSym = (a, b) => `${a}*sqrt3 + ${b}  =  ${(a * sqrt3 + b).toFixed(6)}`;
+const isZero = (a, b) => a == 0 && b == 0;
+const isPositive = (a, b) => {  //needs to return false for edge case (0,0) for call in recordMove
+  //if (a == 0 && b == 0) {console.log('DEBUG: isPositive returns false since this was exactly zero'); return false;}
+  if (a <= 0 && b <= 0) return false;
+  if (a >= 0 && b >= 0) return true;
+  return (a > 0) == (3 * a * a > b * b);}
+
+function inExtent (t, isShort) {const h = isShort ? [6, -6] : [0, 6]; //Half-lengths: [6, -6] for short edge (6*sqrt3 - 6), [0, 6] for long edge (6)
+  return isPositive(t[0] + h[0], t[1] + h[1]) && isPositive(h[0] - t[0], h[1] - t[1]);};
+
+function getAngle(ax, bx, ay, by) {
+  if (ay ===   0 && by ===       0) return isPositive(ax, bx) ? 0 :  6;   //   0, 180 deg
+  if (ax ===   0 && bx ===       0) return isPositive(ay, by) ? 3 :  9;   //  90, 270
+  if (ax ===  by && bx ===  3 * ay) return isPositive(ay, by) ? 1 :  7;   //  30, 210
+  if (ax === -by && bx === -3 * ay) return isPositive(ay, by) ? 5 : 11;   // 150, 330 
+  if (ay ===  bx && by ===  3 * ax) return isPositive(ay, by) ? 2 :  8;   //  60, 240 
+  if (ay === -bx && by === -3 * ax) return isPositive(ay, by) ? 4 : 10;   // 120, 300 
+  return -1;}
+
+function getNearestEdgeFromIndex(cIdx) {const mid0 = mids[cIdx];
+  let adSqMin = 0, bdSqMin = 0, nearest = -1;
+  for (let i = 0; i < mids.length; i++) {if (i != cIdx && blockedMids[i] == 0) {
+    const [dax, dbx, day, dby] = subTuplesXY(mid0, mids[i]);
+    const adSq = 2 * (dax * dbx + day * dby), bdSq = 3 * (dax * dax + day * day) + (dbx * dbx + dby * dby); //(X^2+Y^2) INLINED AND PLACED TWICE
+    if (nearest == -1 || isPositive(adSqMin - adSq, bdSqMin - bdSq)) {adSqMin = adSq; bdSqMin = bdSq; nearest = i;}}}
+  console.log('mids[', cIdx,    '] = ', mid0);
+  console.log('mids[', nearest, '] = ', mids[nearest], ' = nearest midpoint');
+  const [dax, dbx, day, dby] = subTuplesXY(mid0, mids[nearest]);
+  console.log('nearest ang=', getAngle(dax, dbx, day, dby));
+  return nearest;}
+
+let includeBlocked = false;
+function getNearestEdgeFromPointer(e) {
   const rect = canvas.getBoundingClientRect();
   const mx = (e.clientX - rect.left - drawWby2 - panX);
   const my = (e.clientY - rect.top  - drawHby2 - panY);
   let minDist = Infinity, nearest = -1;
-  for (let i = 0; i < mids.length; i++) {if (blockedMids[i] === 0) {
-      const d = Math.hypot(mx - drawScale * (sqrt3 * mids[i][0] + mids[i][1]), my - drawScale * (sqrt3 * mids[i][2] + mids[i][3]));
-      if (d < minDist) { minDist = d; nearest = i; }}}
-  return minDist < drawScale6 ? nearest : -1;}
-canvas.addEventListener('pointerdown', e => {const nearest = getNearestEdge(e); //Website needs to best support desktops (with a mouse) and laptops (with a trackpad).  Smartphones and other touchscreens also must be supported, but the methods for toggling rotation candidates and placing tiles may be awkward.
+  for (let i = 0; i < mids.length; i++) {if (includeBlocked || (blockedMids[i] === 0)) {
+    const d = Math.hypot(mx - drawScale * (sqrt3 * mids[i][0] + mids[i][1]), my - drawScale * (sqrt3 * mids[i][2] + mids[i][3]));
+    if (d < minDist) { minDist = d; nearest = i; }}}
+  return minDist < previewScale ? nearest : -1;}
+
+canvas.addEventListener('pointerdown', e => {const nearest = getNearestEdgeFromPointer(e); //Website needs to best support desktops (with a mouse) and laptops (with a trackpad).  Smartphones and other touchscreens also must be supported, but the methods for toggling rotation candidates and placing tiles may be awkward.
   if (nearest !== -1 && e.pointerType === 'touch') {isPanning = false; if (hoveredMidIdx !== nearest) {
-    //3:39 AM 8/29/2026 added draw to doToggle and commented this out to see if it works better for touchscreen: e.preventDefault(); //GEMINI**** says I need this (but my thought was to not include it per note one line below): Suppresses synthetic click ONLY on initial selection
+    //3:39 AM 8/29/2026 added draw to doToggle and commented this out to see if it works better for touchscreen: e.preventDefault(); //GEMINI says I need this (but I found no improvement with it): Suppresses synthetic click ONLY on initial selection
     hoveredMidIdx = nearest; getCandidates();}} //for touchscreens: preventDefault (to avoid normal phone's panning, so that this site can instead use its own pan) should not be needed because CSS "touch-action: pinch-zoom;" is used
   else {isPanning = true; if (hoveredMidIdx !== nearest) hoveredMidIdx = -1; startX = e.clientX; startY = e.clientY;}});
-canvas.addEventListener('pointermove', e => {if (!isPanning) {const nearest = getNearestEdge(e);
+canvas.addEventListener('pointermove', e => {if (!isPanning) {const nearest = getNearestEdgeFromPointer(e);
   if (nearest !== -1 && hoveredMidIdx !== nearest) {hoveredMidIdx = nearest; getCandidates();}}});
 canvas.addEventListener('pointerup', e => {
   if (isPanning) {isPanning = false;
     const dx = e.clientX - startX;
     const dy = e.clientY - startY;
-    if (Math.hypot(dx, dy) > drawScale6) {panX += dx; panY += dy; hoveredMidIdx = -1; draw();}}});
+    if (Math.hypot(dx, dy) > previewScale) {panX += dx; panY += dy; hoveredMidIdx = -1; draw();}}});
 
-function recordMove(m) {if (!m || !Array.isArray(m) || m.length !== mids0L) {syncBtn.style.backgroundColor = '#fca5a5'; console.warn('WARNING: peer hit undo? sync probably needed (isSyncing=true so placing tiles on new tiles could register illegal moves at the server!): expected a tile containing exactly' + mids0L + 'mids'); return;} //In the future, I might add "isSyncing=false" here for a different undo saving method ****
+
+
+const subTuple = (t1, t2) => [t1[0] - t2[0], t1[1] - t2[1]];
+const mulTuple = (t1, t2) => [t1[0] * t2[1] + t1[1] * t2[0], 3 * t1[0] * t2[0] + t1[1] * t2[1]];
+const divTuple = (t1, t2) => {const denom = t2[1] * t2[1] - 3 * t2[0] * t2[0];
+  const num = mulTuple(t1, [-t2[0], t2[1]]);
+  if (denom == 0) {alert('ERROR: divisor t2 must have been zero: [' + t2[0] + ',' + t2[1] + '] = ' + denom); return null;}
+  if (num[0] % denom != 0) alert('ERROR: a-division not integral despite long-edge-12 Cairo pentagons: ' + num[0] + ' / ' + denom);
+  if (num[1] % denom != 0) alert('ERROR: b-division not integral despite long-edge-12 Cairo pentagons: ' + num[1] + ' / ' + denom);
+  return [num[0] / denom, num[1] / denom];};
+
+function getEdgeIntersectionDistances(idx1, idx2) {
+  const e1 = TRIG30[mids[idx1][4]]; const C1 = [e1[0], e1[1]], S1 = [e1[2], e1[3]]; // 2*cos1, 2*sin1
+  const e2 = TRIG30[mids[idx2][4]]; const C2 = [e2[0], e2[1]], S2 = [e2[2], e2[3]]; // 2*cos2, 2*sin2
+
+  const two_dx = [2 * (mids[idx2][0] - mids[idx1][0]), 2 * (mids[idx2][1] - mids[idx1][1])];
+  const two_dy = [2 * (mids[idx2][2] - mids[idx1][2]), 2 * (mids[idx2][3] - mids[idx1][3])];
+
+  // System Determinant: Det = S1*C2 - C1*S2
+  const det = subTuple(mulTuple(S1, C2), mulTuple(C1, S2));
+  if (det[0] == 0 && det[1] == 0) return false;
+  //if (det[0] == 0 && det[1] == 0) {console.log('parallel edges intersect at {Inf, Inf}'); return false;}
+
+  // t1 = (C2 * 2dy - S2 * 2dx) / Det
+  const num1 = subTuple(mulTuple(C2, two_dy), mulTuple(S2, two_dx));
+  const t1 = divTuple(num1, det);
+
+  // t2 = (C1 * 2dy - S1 * 2dx) / Det
+  const num2 = subTuple(mulTuple(C1, two_dy), mulTuple(S1, two_dx));
+  const t2 = divTuple(num2, det);
+
+  const isShort1 = (idx1 % 5 === 4), isShort2 = (idx2 % 5 === 4);
+  const in1 = inExtent(t1, isShort1);
+  const in2 = inExtent(t2, isShort2);
+  const intersects = in1 && in2;
+
+  if (intersects) {
+    const h1 = isShort1 ? [6, -6] : [0, 6];
+    const h2 = isShort2 ? [6, -6] : [0, 6];
+    console.log(`Intersection into Edge ${idx1} at `, fmtSym(t1[0], t1[1]), '(extent is', fmtSym(h1[0], h1[1]), ')');
+    console.log(`Intersection into Edge ${idx2} at `, fmtSym(t2[0], t2[1]), '(extent is', fmtSym(h2[0], h2[1]), ')');
+    console.log('Interior Intersection:', intersects);
+  }
+  //return { t1, t2 };
+  return intersects;
+}
+
+
+let totalText = '';
+const chatBox = document.getElementById('wideBox');
+chatBox.addEventListener('keydown', e => {if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    const currentVal = chatBox.value;
+    let i = 0; while (i < totalText.length && i < currentVal.length && totalText[i] === currentVal[i]) i++;
+    const m = currentVal.slice(i);
+    if (m.trim()) {const payload = JSON.stringify(m);
+      for (const target in dcs) {if (dcs[target].readyState === 'open') dcs[target].send(payload);}
+      totalText += m + '\n'; chatBox.value = totalText; chatBox.scrollTop = chatBox.scrollHeight;
+    }}});
+
+const undoStack = [];
+function recordMove(m) {
+  if (typeof m === 'string') {
+    totalText += m + '\n'; chatBox.value = totalText; chatBox.scrollTop = chatBox.scrollHeight;
+    return true;}
+  if (!m || !Array.isArray(m) || m.length !== mids0L) {syncBtn.style.backgroundColor = '#fca5a5'; console.warn('WARNING: peer hit undo? sync probably needed (isSyncing=true so placing tiles on new tiles could register illegal moves at the server!): expected a tile containing exactly' + mids0L + 'mids'); return false;} //In the future, I might add "isSyncing=false" here for a different undo saving method
+
+  const midsLold = mids.length; mids.push(...m); const midsLnew = mids.length;
+  blockedMids.length = midsLnew; blockedMids.fill(0, midsLold); 
   const pairedIndices = [];
-  const newBlocked = Array(mids0L).fill(0);
-  for (let cIdx = 0; cIdx < mids0L; cIdx++) {const cM = m[cIdx];
-  for (let i = 0; i < mids.length; i++) {const existing = mids[i];
-      if (existing[0] === cM[0] && existing[1] === cM[1] && existing[2] === cM[2] && existing[3] === cM[3]) {
-        if ((existing[4] - cM[4] + 12) % 12 !== 6) alert('ERROR: tile edges cross at indices ' + i + ' ' + (mids.length + cIdx));
-        else if (blockedMids[i] !== 0) alert('ERROR: three tile edges at indices ' + i + ' ' + (mids.length + cIdx));
-        if (blockedMids[i] === 0) {blockedMids[i] = 1; pairedIndices.push(i);}
-        newBlocked[cIdx] = 1;
-        break;}}}
-  undoStack.push({pairedIndices, numNewMids: m.length});
-  mids.push(...m);
-  blockedMids.push(...newBlocked);}
+  const fail = () => {alert('ERROR: tile edges cross, so choose differently');
+    for (let ip = 0; ip < pairedIndices.length; ip++) blockedMids[pairedIndices[ip]] = 0;
+    mids.length = midsLold; blockedMids.length = midsLold;};
+
+  //used console.time() to mesure speed improvement: originally 259 tiles take 5ms to finish outer loop (550 tiles take 10ms); "if (i % 5 == 0)" loop runs 626 tiles with 2ms being about worst case (for a surrounded tile)
+  for (let cIdx = midsLold; cIdx < midsLnew; cIdx++) {const mid0 = mids[cIdx];
+  let i = 0; while (i < midsLold) {
+      if (i % 5 == 0  &&  ((Math.abs((mids[cIdx][0] - mids[i][0])*sqrt3 + mids[cIdx][1] - mids[i][1]) > 42) || (Math.abs((mids[cIdx][2] - mids[i][2])*sqrt3 + mids[cIdx][3] - mids[i][3]) > 80))) {i += 5; continue;} //screens out obvious far-away tiles: 24*sqrt(3)=41.6 is the furthest two points (so midpoints allow an even smaller rule) of touching L=12 Cairo pentagons can lie apart from each other
+      if (getEdgeIntersectionDistances(cIdx, i)) {console.error('ERROR: tile edges cross at indices ' + i + ' ' + cIdx); fail(); return false;}
+
+      const existing = mids[i];
+      const [dax, dbx, day, dby] = subTuplesXY(mid0, existing);
+      const adSq = 2 * (dax * dbx + day * dby), bdSq = 3 * (dax * dax + day * day) + (dbx * dbx + dby * dby); //(X^2+Y^2) INLINED AND PLACED TWICE
+
+      if (adSq == 0 && bdSq == 0) {
+        if ((existing[4] - mid0[4] + 12) % 12 != 6) {console.error('ERROR AGAIN: tile edges cross exactly at midpoints at indices ' + i + ' ' + cIdx); fail(); return false;}
+        else if (blockedMids[i] != 0) {console.error('ERROR AGAIN: three tiles with coincident midpoints at indices ' + i + ' ' + cIdx); fail(); return false;}
+        if (blockedMids[i] == 0) {blockedMids[i] = 1; pairedIndices.push(i);} blockedMids[cIdx] = 1;
+
+        //break;}}}  //if not looking for "non-equal-but-too-close" pairs, comment the "else if" lines below out and uncomment this line; this break is then fine (or break could be removed, leaving just "}}}", to check for errors in remaining indices)
+      } else if (isPositive(-216 - adSq, 432 - bdSq)) { // Leter scaled by 3x: True if distance squared < 48 - 24*sqrt(3) which is the distance between short edges at 120 degree angle
+        console.log('Small gap blocks mid ' + i + ' and nearby new_mid ' + cIdx + ' (' + adSq + ',' + bdSq + ')');
+        const diffAng = getAngle(dax, dbx, day, dby);
+        //const isCollinear = diffAng != -1 && (diffAng % 6 == existing[4] % 6);
+        //const isOpposite = (existing[4] - mid0[4] + 12) % 12 == 6;
+        //const abuts = isCollinear && isOpposite;
+        if (diffAng != -1 && (diffAng % 6 == existing[4] % 6)) {
+          if ((existing[4] - mid0[4] + 12) % 12 != 6) {console.error('ERROR AGAIN: nearby collinear tile is rotated at indices ' + i + ' ' + cIdx); fail(); return false;}
+          else console.log('Off-center abutting tiles with angles: mid=' + existing[4] + ', new_mid=' + mid0[4] + ', gap=' + diffAng);
+        }
+        if (blockedMids[i] == 0) {blockedMids[i] = 1; pairedIndices.push(i);} blockedMids[cIdx] = 1;}
+  i++; }}
+  undoStack.push({pairedIndices, numNewMids: mids0L});
+  return true;}
+
 
 const syncBtn = document.getElementById('sBtn');
 const micBtn = document.getElementById('mBtn');
-//const audioCtx = new AudioContext();  //****ENTRY DING: for some reason the Android phone with Firefox dings occasionally when it seems like count does not increase, so just commenting out this feature since these random noises can be distracting anyway
 let isVoiceOn = false;
 let connectedPeerCount = 0;
 let peersL = 2; //this is "my total peers plus two", or "total peers including me plus one", or "connectedPeerCount plus any unconnected plus any reloaded peer multiplicty plus me plus one"  //"ls.sh" below returns my own peer ID plus an ending blank item which together add two
 function updateMicButton() {if (isVoiceOn) micBtn.innerHTML = '<b>Mic to ' + connectedPeerCount + '/' + (peersL-2) + '</b><br>&nbsp;&#127908;&nbsp;';
   else micBtn.innerHTML = '<b>muted to ' + connectedPeerCount + '/' + (peersL-2) + '</b><br><span style="text-decoration: line-through 2px;">&nbsp;&#127908;&nbsp;</span>';}
 function updateConnectedCount() {let count = 0; for (const target in pcs) if (pcs[target].connectionState === 'connected') count++;
-  if (connectedPeerCount < count) {
-    micBtn.style.backgroundColor = '#fca5a5'; setTimeout(() => { micBtn.style.backgroundColor = ''; }, 1000);
-    //const audioOsc = audioCtx.createOscillator(); audioOsc.connect(audioCtx.destination); audioOsc.start(); audioOsc.stop(audioCtx.currentTime + 0.15);  //****ENTRY DING
-  }
+  if (connectedPeerCount < count) {micBtn.style.backgroundColor = '#fca5a5'; setTimeout(() => { micBtn.style.backgroundColor = ''; }, 1000);}
   connectedPeerCount = count; updateMicButton();}
 
 function forgetPC(target) {if (forgetFailedPC > 0 && pcs[target]) {console.warn('[Teardown] Clearing dead connection for ' + target);
@@ -245,7 +382,7 @@ function initPC(target, isInitiator) {
     if (pc.connectionState === 'failed') forgetPC(target); updateConnectedCount();};
   pc.oniceconnectionstatechange = () => console.error('[ICE State - ' + target + ']', pc.iceConnectionState);
   pc.ontrack = e => {
-    if (e.receiver) e.receiver.playoutDelayHint = 0; // 6:01 PM 8/26/2026 forcing minimal jitter buffer delay ****
+    if (e.receiver) e.receiver.playoutDelayHint = 0; // 6:01 PM 8/26/2026 forcing minimal jitter buffer delay, but still maybe 0.3s one-way latency to Florida at times****
     let a = document.getElementById('audio_' + target) || document.createElement('audio');
     a.id = 'audio_' + target; a.autoplay = true;
     if (!a.parentNode) document.getElementById('audios').appendChild(a);
@@ -291,15 +428,14 @@ const stopVoice = () => {
     const t = pc.getTransceivers().find(tr => tr.receiver && tr.receiver.track && tr.receiver.track.kind === 'audio');
     if (t && t.sender) {t.sender.replaceTrack(null).catch(err => alert('replaceTrack null error: ' + err));}}
   isVoiceOn = false;};
-const toggleVoice = async () => {  //****not needed with 1.0s flash now used: if (micBtn.style.backgroundColor !== '') {micBtn.style.backgroundColor = ''; return;}
-  //if (audioCtx.state === 'suspended') {audioCtx.resume(); console.log('AudioContext was suspended and has been resumed.');}  //****ENTRY DING
+const toggleVoice = async () => {
   if (isVoiceOn) stopVoice();
   else await startVoice();
   updateMicButton();};
 
 const sendSig = (to, body) => fetch(prefix + 'append.sh' + signalsQuerySlash + to, { method: 'POST', body: JSON.stringify({ from: ID, ...body }) }).catch(err => console.warn('Send Signal Error: ' + err));
 
-let nextDelayDefault = 1500; //nextDelayDefault = 150000; in console will effectively stop polling for debugging
+let nextDelayDefault = 1500;//nextDelayDefault = 150000; in console will effectively stop polling for debugging
 let fastPollRemainingCount = 0;
 const poll = async () => {
   try {
@@ -345,16 +481,18 @@ const poll = async () => {
       peersL = peersLnew;}
   } catch (err) { console.warn('Signaling Loop Error: ' + err); }
 finally { if (fastPollRemainingCount > 0) {fastPollRemainingCount--; setTimeout(poll, 300);} else {setTimeout(poll, nextDelayDefault);} }};
-//****How do I check if temporary 300ms is helping?
+//****check access logs for timing of signals on next call to Florida to make sure 300ms is usually helping, or to see if I should shorten it further
 
 const loadBoard = () => fetch(prefix + 'cat.sh' + movesQuery, { cache: 'no-store' })
   .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
-  .then(mList => { mids.length = 0; blockedMids.length = 0; undoStack.length = 0; hoveredMidIdx = -1; isSyncing = true; syncBtn.style.backgroundColor = '';
-    mList.forEach(recordMove); draw();}).catch(err => console.warn('Load Board Error: ' + err));
+  .then(mList => { mids.length = 0; blockedMids.length = 0; undoStack.length = 0; isSyncing = true; syncBtn.style.backgroundColor = '';
+    mList.forEach(recordMove); midsLast = mids.length; hoveredMidIdx = -1; draw();}).catch(err => console.warn('Load Board Error: ' + err));
 
-function doPlace() {if (hoveredMidIdx !== -1 && candidates.length > 0) {
-  const selected = candidates[currentOptionIdx % candidates.length];
-  recordMove(selected);
+function doToggle() {currentOptionIdx = (currentOptionIdx + 1) % candidates.length; draw();}
+
+function doPlace() {if (hoveredMidIdx !== -1 && candidates.length > 0) {const selected = candidates[currentOptionIdx % candidates.length];
+  if (!recordMove(selected)) return;
+  midsLast = mids.length;
   hoveredMidIdx = -1; draw();
   const payload = JSON.stringify(selected); for (const target in dcs) {if (dcs[target].readyState === 'open') dcs[target].send(payload);}
   if (isSyncing) {fetch(prefix + 'append.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Post Move Error: ' + err));}}
@@ -363,10 +501,27 @@ canvas.addEventListener('click', doPlace);
 ////****I could add console diagnostics to catch click, pointerdown, pointerup, pointercancel like the following, but it gets complicated to view the console on a mobile phone, so I'd rather just flash some button when these events occur:
 //canvas.addEventListener('click', e => {console.log('CLICK', e.pointerType, e.timeStamp, e); doPlace();});
 
+let berryState = Date.now() | 0;
+//let berryState = 0x12345678; //use any seed here
+const berryState0 = berryState;
+function berryRand(N) {berryState = (berryState + 0x6D2B79F5) | 0;
+  let t = Math.imul(berryState ^ (berryState >>> 15), berryState | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  const rand32 = (t ^ (t >>> 14)) >>> 0;
+  currentOptionIdx = (rand32 >>> 10) & 1;
+  return rand32 % N;} //random 32-bit uint [0, 4294967295] modulo N
+
+function doRandomPlace() {
+  hoveredMidIdx = berryRand(mids.length);
+  while (blockedMids[hoveredMidIdx] == 1) hoveredMidIdx = berryRand(mids.length);
+  getCandidates();
+  doPlace();}
+
 function undo() {if (undoStack.length !== 0) {  //undo feature currently stops sending moves to server, but will send subsequent moves to peers as a spectator mode (but peers still get their moves saved to game, so this feature is not so useful as it is now)
   isSyncing = false; syncBtn.style.backgroundColor = '#fca5a5';
   const lastAction = undoStack.pop();
   mids.length -= lastAction.numNewMids; blockedMids.length = mids.length;
+  if (midsLast > mids.length) midsLast = mids.length;
   lastAction.pairedIndices.forEach(idx => {if (idx < mids.length) blockedMids[idx] = 0;});
   hoveredMidIdx = -1; draw();
   const payload = JSON.stringify([]); for (const target in dcs) {if (dcs[target].readyState === 'open') dcs[target].send(payload);} //send empty move to peers to make their Sync buttons red (since moves I now make that they receive are not officially being registered)
@@ -374,16 +529,135 @@ function undo() {if (undoStack.length !== 0) {  //undo feature currently stops s
 
 function doReset() {if (confirm("Are you sure you want to clear the board for all connected players?")) {
   mids.length = mids0L; for (let i = 0; i < mids.length; i++) {mids[i][5] = activeColor; mids[i][6] = activeText;}
+  midsLast = mids.length;
   blockedMids.length = mids.length; blockedMids.fill(0); undoStack.length = 0;
   if (hoveredMidIdx >= mids.length) hoveredMidIdx = -1;
   syncBtn.style.backgroundColor = ''; draw();
   const payload = JSON.stringify(mids);
   fetch(prefix + 'replace.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Reset Error: ' + err));}}
 
-window.addEventListener('keydown', e => {
+let lastHoveredMidIdx = 0;
+function queryHoveredMids(idx1, idx2) { //****Do I want to add a Q (or P) button so touchscreen users can do this?
+
+  const m1 = mids[idx1];
+  const cx1 = drawScale * (sqrt3 * m1[0] + m1[1]) + drawWby2 + panX;
+  const cy1 = drawScale * (sqrt3 * m1[2] + m1[3]) + drawHby2 + panY;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = 'white';
+  ctx.beginPath();
+  ctx.arc(cx1, cy1, 6, 0, 2 * Math.PI);
+  ctx.fill();
+  ctx.fillStyle = 'red';
+  ctx.beginPath();
+  ctx.arc(cx1, cy1, 3, 0, 2 * Math.PI);
+  ctx.fill();
+  if (idx2 == -1) {alert('Reference Edge ' + idx1 + ': Hover over a second edge and press Q again for relative spacings'); return;}
+
+  const m2 = mids[idx2];
+  let printString = '=== Edge ' + idx2 + ' vs reference Edge ' + idx1 + ' ===\n';
+  const cx2 = drawScale * (sqrt3 * m2[0] + m2[1]) + drawWby2 + panX;
+  const cy2 = drawScale * (sqrt3 * m2[2] + m2[3]) + drawHby2 + panY;
+  ctx.fillStyle = 'white';
+  ctx.beginPath();
+  ctx.arc(cx2, cy2, 6, 0, 2 * Math.PI);
+  ctx.fill();
+  ctx.fillStyle = 'cyan';
+  ctx.beginPath();
+  ctx.arc(cx2, cy2, 3, 0, 2 * Math.PI);
+  ctx.fill();
+
+  // Pre-calculate Gap Vector & Trig tables
+  const [dax, dbx, day, dby] = subTuplesXY(m2, m1);
+  const tDx = [dax, dbx], tDy = [day, dby];
+  
+  const e1 = TRIG30[m1[4]], C1 = [e1[0], e1[1]], S1 = [e1[2], e1[3]];
+  const e2 = TRIG30[m2[4]], C2 = [e2[0], e2[1]], S2 = [e2[2], e2[3]];
+
+  // 1. Edge Intersection & Touch Analysis
+  const two_dx = [2 * dax, 2 * dbx];
+  const two_dy = [2 * day, 2 * dby];
+
+  const det = subTuple(mulTuple(S1, C2), mulTuple(C1, S2));
+  const isParallel = isZero(det[0], det[1]);
+
+  const isShort1 = (idx1 % 5 === 4), isShort2 = (idx2 % 5 === 4);
+  const h1 = isShort1 ? [6, -6] : [0, 6];
+  const h2 = isShort2 ? [6, -6] : [0, 6];
+
+  if (isParallel) {
+    printString += 'Edges are parallel\n';
+    const gapAng = getAngle(dax, dbx, day, dby);
+    const isCollinear = gapAng !== -1 && (gapAng % 6 === m1[4] % 6);
+    const perpOffset = subTuple(mulTuple(tDy, C1), mulTuple(tDx, S1));
+
+    if (isCollinear && isZero(perpOffset[0], perpOffset[1])) {
+      const parX = mulTuple(tDx, C1), parY = mulTuple(tDy, S1);
+      const dist = [(parX[0] + parY[0]) / 2, (parX[1] + parY[1]) / 2];
+
+      if (( dist[0] === h1[0] + h2[0]) && ( dist[1] === h1[1] + h2[1])) printString += '*** POSITIVE EXACT COLLINEAR END-TO-END TOUCH (0 gap, 0 overlap) ***\n';
+      if ((-dist[0] === h1[0] + h2[0]) && (-dist[1] === h1[1] + h2[1])) printString += '*** NEGATIVE EXACT COLLINEAR END-TO-END TOUCH (0 gap, 0 overlap) ***\n';
+    }
+  } else {
+    const num1 = subTuple(mulTuple(C2, two_dy), mulTuple(S2, two_dx));
+    const num2 = subTuple(mulTuple(C1, two_dy), mulTuple(S1, two_dx));
+    const t1 = divTuple(num1, det);
+    const t2 = divTuple(num2, det);
+
+    if (t1 && t2) {
+      const intersects = inExtent(t1, isShort1) && inExtent(t2, isShort2);
+
+      const checkExtent = (t, h) => {
+        const minZ = isZero(t[0] + h[0], t[1] + h[1]);
+        const maxZ = isZero(h[0] - t[0], h[1] - t[1]);
+        const inWeak = (minZ || isPositive(t[0] + h[0], t[1] + h[1])) &&
+                       (maxZ || isPositive(h[0] - t[0], h[1] - t[1]));
+        return { inWeak, atBoundary: minZ || maxZ };
+      };
+
+      const e1State = checkExtent(t1, h1);
+      const e2State = checkExtent(t2, h2);
+      const exactTouch = e1State.inWeak && e2State.inWeak && (e1State.atBoundary || e2State.atBoundary);
+
+      printString += 'Intersection into Edge ' + idx1 + ' at   ' + fmtSym(t1[0], t1[1]) + '\n                     extent is ' + fmtSym(h1[0], h1[1]) + '\n';
+      printString += 'Intersection into Edge ' + idx2 + ' at   ' + fmtSym(t2[0], t2[1]) + '\n                     extent is ' + fmtSym(h2[0], h2[1]) + '\n';
+      printString += '   => Interior Intersection: ' + intersects + '\n';
+
+      if (exactTouch) printString += '*** EXACT ENDPOINT TOUCH (0 gap, 0 overlap) ***\n';
+    }
+  }
+
+  printString += 'Gap Vector           dx: ' + fmtSym(dax, dbx) + '\n';
+  printString += '                     dy: ' + fmtSym(day, dby) + '\n';
+  // Parallel & Perpendicular Projections relative to Edge 1
+  const parX = mulTuple(tDx, C1), parY = mulTuple(tDy, S1);
+  const parTuple = [(parX[0] + parY[0]) / 2, (parX[1] + parY[1]) / 2];
+  const perpY = mulTuple(tDy, C1), perpX = mulTuple(tDx, S1);
+  const perpTuple = [(perpY[0] - perpX[0]) / 2, (perpY[1] - perpX[1]) / 2];
+  printString += '      along     Edge ' + idx1 + ': ' + fmtSym(parTuple[0],  parTuple[1])  + '\n';
+  printString += '      normal to Edge ' + idx1 + ': ' + fmtSym(perpTuple[0], perpTuple[1]) + '\n';
+
+  // Abutting & Alignment Analysis
+  const gapAng = getAngle(dax, dbx, day, dby);
+  const isOpposite = (m1[4] - m2[4] + 12) % 12 === 6;
+  const isCollinear = gapAng !== -1 && (gapAng % 6 === m1[4] % 6);
+  const abuts = isCollinear && isOpposite;
+  printString += 'Gap Angle: ' + gapAng + '    Opposite: ' + isOpposite + '    Abuts: ' + abuts;
+
+  alert(printString);
+  //console.log(printString);
+}
+
+let qCount = 0;
+window.addEventListener('keydown', e => { if (['TEXTAREA', 'INPUT'].includes(e.target.tagName)) return;
        if (e.code === 'Space') {e.preventDefault(); doToggle();}
   else if (e.code === 'KeyS')  {e.preventDefault(); loadBoard();}
+  else if (e.code === 'KeyP')  {e.preventDefault(); doRandomPlace();}
   else if (e.code === 'KeyU' || e.code === 'Backspace')   {e.preventDefault(); undo();}
+  else if (e.code === 'KeyQ')  {e.preventDefault();
+    qCount++; if (qCount == 3) {qCount = 0; includeBlocked = false;} else includeBlocked = true;
+    queryHoveredMids(lastHoveredMidIdx, hoveredMidIdx);
+    if (hoveredMidIdx != -1) lastHoveredMidIdx = hoveredMidIdx;
+  }
   else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyR') {e.preventDefault(); doReset();}});
 
 draw();
