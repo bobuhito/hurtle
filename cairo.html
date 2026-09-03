@@ -436,7 +436,7 @@ const toggleVoice = async () => {
 
 const sendSig = (to, body) => fetch(prefix + 'append.sh' + signalsQuerySlash + to, { method: 'POST', body: JSON.stringify({ from: ID, ...body }) }).catch(err => console.warn('Send Signal Error: ' + err));
 
-let nextDelayDefault = 150000;//nextDelayDefault = 150000; in console will effectively stop polling for debugging
+let nextDelayDefault = 1500;//nextDelayDefault = 150000; in console will effectively stop polling for debugging
 let fastPollRemainingCount = 0;
 const poll = async () => {
   try {
