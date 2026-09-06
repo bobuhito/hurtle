@@ -50,6 +50,7 @@ const activeText = urlParams.get('t') ?? '';
 const gameDir = urlParams.get('g') ?? 'c';
 const movesQuery = '?file=' + gameDir + '/moves';
 const signalsQuerySlash = '?file=' + gameDir + '/s/';
+const diagnosticsQuerySlash = '?file=' + gameDir + '/d/';
 const peersDir = gameDir + '/p';
 const prefix = '/p@i@e@c@e@s/';
 const ID = activeColor.slice(1) + activeText.replace(/[^a-zA-Z0-9]/g, '');
@@ -196,7 +197,7 @@ const blockedMids = Array(mids0L).fill(0); //Indicator of whether the edge has b
 
 const fmtSym = (a, b) => `${a}*sqrt3 + ${b}  =  ${(a * sqrt3 + b).toFixed(6)}`;
 const isZero = (a, b) => a == 0 && b == 0;
-const isPositive = (a, b) => {  //needs to return false for edge case (0,0) for call in recordMove
+const isPositive = (a, b) => {  //needs to return false for edge case (0,0) for call in locallyAppendMoveIfValid
   //if (a == 0 && b == 0) {console.log('DEBUG: isPositive returns false since this was exactly zero'); return false;}
   if (a <= 0 && b <= 0) return false;
   if (a >= 0 && b >= 0) return true;
@@ -251,7 +252,6 @@ canvas.addEventListener('pointerup', e => {
     if (Math.hypot(dx, dy) > previewScale) {panX += dx; panY += dy; hoveredMidIdx = -1; draw();}}});
 
 
-
 const subTuple = (t1, t2) => [t1[0] - t2[0], t1[1] - t2[1]];
 const mulTuple = (t1, t2) => [t1[0] * t2[1] + t1[1] * t2[0], 3 * t1[0] * t2[0] + t1[1] * t2[1]];
 const divTuple = (t1, t2) => {const denom = t2[1] * t2[1] - 3 * t2[0] * t2[0];
@@ -291,8 +291,7 @@ function getEdgeIntersectionDistances(idx1, idx2) {
     const h2 = isShort2 ? [6, -6] : [0, 6];
     console.log(`Intersection into Edge ${idx1} at `, fmtSym(t1[0], t1[1]), '(extent is', fmtSym(h1[0], h1[1]), ')');
     console.log(`Intersection into Edge ${idx2} at `, fmtSym(t2[0], t2[1]), '(extent is', fmtSym(h2[0], h2[1]), ')');
-    console.log('Interior Intersection:', intersects);
-  }
+    console.log('Interior Intersection:', intersects);}
   //return { t1, t2 };
   return intersects;
 }
@@ -311,16 +310,14 @@ chatBox.addEventListener('keydown', e => {if (e.key === 'Enter' && !e.shiftKey) 
     }}});
 
 const undoStack = [];
-function recordMove(m) {
-  if (typeof m === 'string') {
-    totalText += m + '\n'; chatBox.value = totalText; chatBox.scrollTop = chatBox.scrollHeight;
-    return true;}
+function locallyAppendMoveIfValid(m) {
+  if (typeof m === 'string') {totalText += m + '\n'; chatBox.value = totalText; chatBox.scrollTop = chatBox.scrollHeight; return true;}
   if (!m || !Array.isArray(m) || m.length !== mids0L) {syncBtn.style.backgroundColor = '#fca5a5'; console.warn('WARNING: peer hit undo? sync probably needed (isSyncing=true so placing tiles on new tiles could register illegal moves at the server!): expected a tile containing exactly' + mids0L + 'mids'); return false;} //In the future, I might add "isSyncing=false" here for a different undo saving method
 
   const midsLold = mids.length; mids.push(...m); const midsLnew = mids.length;
   blockedMids.length = midsLnew; blockedMids.fill(0, midsLold); 
   const pairedIndices = [];
-  const fail = () => {alert('ERROR: tile edges cross, so choose differently');
+  const fail = () => {alert('USER ERROR: tile edges cross, so choose differently');
     for (let ip = 0; ip < pairedIndices.length; ip++) blockedMids[pairedIndices[ip]] = 0;
     mids.length = midsLold; blockedMids.length = midsLold;};
 
@@ -382,7 +379,7 @@ function initPC(target, isInitiator) {
     if (pc.connectionState === 'failed') forgetPC(target); updateConnectedCount();};
   pc.oniceconnectionstatechange = () => console.error('[ICE State - ' + target + ']', pc.iceConnectionState);
   pc.ontrack = e => {
-    if (e.receiver) e.receiver.playoutDelayHint = 0; // 6:01 PM 8/26/2026 forcing minimal jitter buffer delay, but still maybe 0.3s one-way latency to Florida at times****
+    if (e.receiver) e.receiver.playoutDelayHint = 0;
     let a = document.getElementById('audio_' + target) || document.createElement('audio');
     a.id = 'audio_' + target; a.autoplay = true;
     if (!a.parentNode) document.getElementById('audios').appendChild(a);
@@ -391,7 +388,7 @@ function initPC(target, isInitiator) {
       sendSig(target, { candidate: e.candidate });}};
   pc.onicecandidateerror = e => {console.warn('[STUN fail - ' + target + ']', e.url, 'Err:', e.errorCode, e.errorText);};
   const attachDC = dc => {dc.onmessage = e => {
-      try {recordMove(JSON.parse(e.data)); draw();}
+      try {locallyAppendMoveIfValid(JSON.parse(e.data)); draw();}
       catch (err) {alert('DataChannel Message Error: ' + err);}};
     dc.onclose = () => delete dcs[target];  //dc.onclose = () => { if (dcs[target] === dc) delete dcs[target]; }; //reconstructed dc is possible, but delete dcs is also done in the teardown
     dcs[target] = dc;};
@@ -454,15 +451,15 @@ const poll = async () => {
             //if (s.sdp.type === 'offer' && (pc.signalingState === 'have-local-offer' || pc.iceGatheringState !== 'new')) {if (ID < s.from) continue; if (pc.signalingState === 'have-local-offer') {await pc.setLocalDescription({ type: 'rollback' });}}
             //if (s.sdp.type === 'offer' && pc.signalingState !== 'stable') {if (ID < s.from) continue; if (dcs[s.from]) dcs[s.from].close(); await pc.setLocalDescription({ type: 'rollback' });}
 
-            await pc.setRemoteDescription(s.sdp);
+            await pc.setRemoteDescription(s.sdp);  //**** Once saw this error so I added "s.sdp?.type" print below for future debugging: SDP handling error: InvalidStateError: Failed to execute 'setRemoteDescription' on 'RTCPeerConnection': Failed to set remote answer sdp: Called in wrong state: stable
             if (s.sdp.type === 'offer') {
               const t = pc.getTransceivers().find(tr => tr.receiver.track.kind === 'audio');
               if (t && t.sender) {t.direction = 'sendrecv';
                 if (stream && stream.getAudioTracks()[0]) t.sender.replaceTrack(stream.getAudioTracks()[0]);}
               else alert('ERROR: audio transceiver somehow never got enabled by offerer ' + s.from);
-              await pc.setLocalDescription(await pc.createAnswer()).catch(err => alert('ERROR: never seen: SDP Answer (kept catch in for debugging ****, though it now will not hit continue below): ' + err));
+              await pc.setLocalDescription(await pc.createAnswer()).catch(err => {alert('NEVER SEEN ERROR: SDP Answer: ' + err); throw err;});
               sendSig(s.from, { sdp: pc.localDescription });}
-          } catch (err) { console.warn('SDP handling error: ' + err); continue; }}
+          } catch (err) {console.warn('SDP handling error from ' + s.from + ' [incoming sdp.type: ' + s.sdp?.type + ', signalingState: ' + pc.signalingState + ', iceState: ' + pc.iceConnectionState + ']: ' + err); continue;}}
         if (pc.remoteDescription) {while (pc.iceQueue.length) {await pc.addIceCandidate(pc.iceQueue.shift()).catch(err => console.warn('ICE add error:', err));}}
         if (s.candidate) {
           if (pc.remoteDescription) await pc.addIceCandidate(s.candidate).catch(err => console.warn('ICE add error: ' + err));
@@ -487,17 +484,70 @@ finally { if (fastPollRemainingCount > 0) {fastPollRemainingCount--; setTimeout(
 const loadBoard = () => fetch(prefix + 'cat.sh' + movesQuery, { cache: 'no-store' })
   .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
   .then(mList => { mids.length = 0; blockedMids.length = 0; undoStack.length = 0; isSyncing = true; syncBtn.style.backgroundColor = '';
-    mList.forEach(recordMove); midsLast = mids.length; hoveredMidIdx = -1; draw();}).catch(err => console.warn('Load Board Error: ' + err));
+    mList.forEach(locallyAppendMoveIfValid); midsLast = mids.length; hoveredMidIdx = -1; draw();}).catch(err => console.warn('Load Board Error: ' + err));
 
 function doToggle() {currentOptionIdx = (currentOptionIdx + 1) % candidates.length; draw();}
 
+
+const lineSeparator = ' | ';
+//const lineSeparator = '\n';
+async function stringifyStats() {let totalString = ''; for (const [peerId, peerConnection] of Object.entries(pcs)) {const stats = await peerConnection.getStats();
+    totalString += 'PEER: ' + peerId + ' (' + peerConnection.connectionState + ')' + lineSeparator;
+    const activePair = [...stats.values()].find(r => r.type === 'candidate-pair' && (r.selected || r.nominated || (r.state === 'succeeded' && r.bytesSent > 0)));
+    //const activeOneWayMs = (activePair?.currentRoundTripTime != null ? Math.round(activePair.currentRoundTripTime * 1000) : 0) / 2;
+    stats.forEach(report => {
+      if (report.type === 'candidate-pair' && (report.state === 'succeeded' || report.nominated || report.bytesSent > 0)) {
+        const localCandidate = stats.get(report.localCandidateId);
+        const remoteCandidate = stats.get(report.remoteCandidateId);
+        if (localCandidate && remoteCandidate) {
+          const isActive = (report === activePair || report.selected || report.nominated) ? ' **' : '';
+          const pairRtt = report.currentRoundTripTime != null ? Math.round(report.currentRoundTripTime * 1000) : null;
+          const pingStr = pairRtt !== null ? pairRtt + 'ms (~' + (pairRtt / 2).toFixed(1) + ' 1-way)' : 'RTT Pending/NA';
+          const sentB = report.bytesSent;
+          const recvB = report.bytesReceived;
+          totalString += report.timestamp + lineSeparator + 'Local: ' + (localCandidate.address || localCandidate.ip) + ':' + localCandidate.port + ' (' + localCandidate.candidateType + '/' + localCandidate.protocol + ')' + isActive + lineSeparator;
+          totalString += 'Remote: ' + (remoteCandidate.address || remoteCandidate.ip) + ':' + remoteCandidate.port + ' (' + remoteCandidate.candidateType + '/' + remoteCandidate.protocol + ')' + lineSeparator;
+          totalString += 'Ping: ' + pingStr + '  Traffic: ' + sentB + 'B out / ' + recvB + 'B in' + lineSeparator;}}
+      if (report.type === 'data-channel') totalString += report.timestamp + lineSeparator + 'DataChannel "' + report.label + '" ' + report.dataChannelIdentifier + ': ' + report.messagesSent + ' msgs sent (' + report.bytesSent + 'B)   ' + report.messagesReceived + ' msgs recv (' + report.bytesReceived + 'B)' + lineSeparator;
+      if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+        const codecObj = stats.get(report.codecId);
+        const fmt = codecObj ? codecObj.mimeType?.replace('audio/', '') + ' ' + codecObj.clockRate + 'Hz*' + (codecObj.channels || 1) + 'ch' : 'audio';
+        const recvPackets = report.packetsReceived || 0;
+        const localLostCount = report.packetsLost || 0;
+        const lossPct = recvPackets > 0 ? ((localLostCount / recvPackets) * 100).toFixed(2) : 'muted 0';
+        const localLoss = localLostCount + ' lost (' + lossPct + '%)';
+        const vol = report.audioLevel != null ? ((report.audioLevel * 100).toFixed(2) + '%') : 'N/A';
+        const recvSamples = report.totalSamplesReceived;
+        const recvConcealedSamples = report.concealedSamples;
+        const recvConcealedBursts = report.concealmentEvents;
+        const glitchPct = recvSamples > 0 ? ((recvConcealedSamples / recvSamples) * 100).toFixed(1) : '0.0';
+        const stretch = '+' + (report.insertedSamplesForDeceleration || 0) + '/-' + (report.removedSamplesForAcceleration || 0) + ' samples';
+        const jitterBufMs = report.jitterBufferEmittedCount ? (report.jitterBufferDelay / report.jitterBufferEmittedCount) * 1000 : 0;
+        totalString += report.timestamp + lineSeparator + 'Inbound Audio (' + fmt + '): ' + recvPackets + ' recv (' + (report.bytesReceived || 0) + 'B)   Vol: ' + vol + '   Loss: ' + localLoss + '   FEC Repaired: ' + (report.packetsRepaired || 0) + '   Glitch: ' + glitchPct + '%' + lineSeparator;
+        totalString += '  ' + recvSamples + ' samples (including ' + recvConcealedSamples + ' concealed in ' + recvConcealedBursts + ' bursts)' + lineSeparator;
+        totalString += '  delay: Ping/2 + 25ms + jitterBuf=' + jitterBufMs.toFixed(1) + 'ms   Jitter: ' + (report.jitter * 1000).toFixed(1) + 'ms   Stretch: ' + stretch + lineSeparator;}
+      if (report.type === 'outbound-rtp' && report.kind === 'audio') {
+        const codecObj = stats.get(report.codecId);
+        const fmt = codecObj ? codecObj.mimeType?.replace('audio/', '') + ' ' + codecObj.clockRate + 'Hz*' + (codecObj.channels || 1) + 'ch' : 'audio';
+        const remoteInbound = stats.get(report.remoteId);
+        const sentPackets = report.packetsSent || 0;
+        const remoteLostCount = remoteInbound?.packetsLost || 0;
+        const remoteLossPct = sentPackets > 0 ? ((remoteLostCount / sentPackets) * 100).toFixed(2) : 'muted 0';
+        const remoteLoss = remoteInbound ? remoteLostCount + ' lost (' + remoteLossPct + '% ~ ' + (remoteInbound.fractionLost * 100).toFixed(2) + '%)' : 'Pending...';
+        const mic = stats.get(report.mediaSourceId);
+        const micVol = mic?.audioLevel != null ? ((mic.audioLevel * 100).toFixed(2) + '%') : 'N/A';
+        totalString += report.timestamp + lineSeparator + 'Outbound Audio (' + fmt + '): ' + sentPackets + ' sent (' + (report.bytesSent || 0) + 'B)   Vol: ' + micVol + '   Loss: ' + remoteLoss + lineSeparator;}});}
+return totalString;}
+//stringifyStats().then(console.log);
+
 function doPlace() {if (hoveredMidIdx !== -1 && candidates.length > 0) {const selected = candidates[currentOptionIdx % candidates.length];
-  if (!recordMove(selected)) return;
+  if (!locallyAppendMoveIfValid(selected)) return;
   midsLast = mids.length;
   hoveredMidIdx = -1; draw();
   const payload = JSON.stringify(selected); for (const target in dcs) {if (dcs[target].readyState === 'open') dcs[target].send(payload);}
-  if (isSyncing) {fetch(prefix + 'append.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Post Move Error: ' + err));}}
-else doToggle();} //to help touchscreen case, let's toggle whenever no tile was placable
+  if (isSyncing) {fetch(prefix + 'append.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Post Move Error: ' + err));}
+  stringifyStats().then(statsStr => fetch(prefix + 'append.sh' + diagnosticsQuerySlash + ID, { method: 'POST', body: statsStr })).catch(err => console.warn('Diagnostics Log Error: ' + err));
+} else doToggle();} //to help touchscreen case, let's toggle whenever no tile was placable
 canvas.addEventListener('click', doPlace);
 ////****I could add console diagnostics to catch click, pointerdown, pointerup, pointercancel like the following, but it gets complicated to view the console on a mobile phone, so I'd rather just flash some button when these events occur:
 //canvas.addEventListener('click', e => {console.log('CLICK', e.pointerType, e.timeStamp, e); doPlace();});
