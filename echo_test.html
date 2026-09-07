@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Audio Latency & Processing Diagnostic</title>
+  <style>
+    body { font-family: monospace; padding: 20px; background: #111; color: #eee; }
+    button { padding: 8px 16px; margin-right: 12px; cursor: pointer; }
+    label { margin-right: 12px; cursor: pointer; }
+    pre { background: #222; padding: 12px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <button id="btnToggle">Start Loopback</button>
+  <label><input type="checkbox" id="chkAEC"> Echo Cancellation</label>
+  <label><input type="checkbox" id="chkNS"> Noise Suppression</label>
+  <label><input type="checkbox" id="chkAGC"> Auto Gain Control</label>
+  <label><input type="checkbox" id="chkLowLat" checked> Low Latency Hint</label>
+  <br><br>
+  <pre id="log">Click 'Start Loopback' to run diagnostics.</pre>
+
+  <script>
+    let stream, ctx, source;
+    const btnToggle = document.getElementById('btnToggle');
+    const log = document.getElementById('log');
+
+    const inputs = ['chkAEC', 'chkNS', 'chkAGC', 'chkLowLat'].map(id => document.getElementById(id));
+    inputs.forEach(el => el.onchange = () => { if (stream) restart(); });
+
+    btnToggle.onclick = async () => stream ? stop() : start();
+
+    async function start() {
+      try {
+        const useLowLat = document.getElementById('chkLowLat').checked;
+        
+        ctx = new (window.AudioContext || window.webkitAudioContext)({
+          latencyHint: useLowLat ? 'interactive' : 'balanced'
+        });
+        if (ctx.state === 'suspended') await ctx.resume();
+
+        const audioConstraints = {
+          echoCancellation: document.getElementById('chkAEC').checked,
+          noiseSuppression: document.getElementById('chkNS').checked,
+          autoGainControl: document.getElementById('chkAGC').checked
+        };
+        if (useLowLat) audioConstraints.latency = { ideal: 0 };
+
+        stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+
+        const track = stream.getAudioTracks()[0];
+        const s = track.getSettings();
+
+        const baseMs = ctx.baseLatency ? (ctx.baseLatency * 1000).toFixed(2) : 'N/A';
+        const outputMs = ctx.outputLatency ? (ctx.outputLatency * 1000).toFixed(2) : 'N/A';
+        const totalOutMs = (ctx.baseLatency && ctx.outputLatency) ? ((ctx.baseLatency + ctx.outputLatency) * 1000).toFixed(2) : 'N/A';
+        const inputMs = s.latency ? (s.latency * 1000).toFixed(2) : 'N/A';
+
+        log.innerText = `--- LATENCY METRICS ---
+AudioContext Base Latency   : ${baseMs} ms
+AudioContext Output Latency : ${outputMs} ms
+Total Output Latency        : ${totalOutMs} ms
+Hardware Input Latency      : ${inputMs} ms
+
+--- AUDIO CONFIGURATION ---
+AudioContext Sample Rate    : ${ctx.sampleRate} Hz
+Track Sample Rate           : ${s.sampleRate || 'N/A'} Hz
+Track Bit Depth             : ${s.sampleSize || 'N/A'} bits
+Channels                    : ${s.channelCount || 'N/A'}
+Echo Cancellation Active    : ${s.echoCancellation ?? 'N/A'}
+Noise Suppression Active    : ${s.noiseSuppression ?? 'N/A'}
+Auto Gain Control Active    : ${s.autoGainControl ?? 'N/A'}
+Device ID                   : ${s.deviceId || 'Default'}`;
+
+        source = ctx.createMediaStreamSource(stream);
+        source.connect(ctx.destination);
+        btnToggle.innerText = 'Stop Loopback';
+      } catch (err) {
+        log.innerText = `Error: ${err.message}`;
+      }
+    }
+
+    function stop() {
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      if (ctx) ctx.close();
+      stream = null;
+      btnToggle.innerText = 'Start Loopback';
+    }
+
+    async function restart() { stop(); await start(); }
+  </script>
+</body>
+</html>

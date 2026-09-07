@@ -1,0 +1,42 @@
+<!doctype html>
+<html><body style="font:14px monospace;background:#111;color:#eee;padding:20px">
+<button id="go">Run Self-Hearing Test</button>
+<pre id="log">Turn up speaker volume, un-mute mic, then run the test.</pre>
+<script>
+const silentSamples=24000;
+const code=`class P extends AudioWorkletProcessor{
+  constructor(){super();this.n=0;this.r=null;this.port.onmessage=e=>{this.n=0;this.r=new Float32Array(e.data)}}
+  process(ins,outs){const a=ins[0]?.[0],o=outs[0]?.[0];for(let i=0;i<128;i++){let n=this.n++;
+    if(o)o[i]=(n>=${silentSamples}&&n<(${silentSamples}+12))?1:0;
+    if(this.r&&a)this.r[n]=a[i];if(this.r&&n===this.r.length-1){this.port.postMessage(this.r,[this.r.buffer]);this.r=null}}
+    return true}}
+registerProcessor('p',P);`;
+let ctx,node,stream,log=document.getElementById('log'),go=document.getElementById('go');
+go.onclick=async()=>{go.disabled=true;try{
+if(!ctx){ctx=new AudioContext();await ctx.audioWorklet.addModule('data:text/javascript;base64,'+btoa(code))}
+if(ctx.state==='suspended')await ctx.resume();
+if(!stream){stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  let s=ctx.createMediaStreamSource(stream);node=new AudioWorkletNode(ctx,'p');s.connect(node);node.connect(ctx.destination)}
+log.textContent='Measuring...';
+let rec=await new Promise(r=>{node.port.onmessage=e=>r(new Float32Array(e.data));node.port.postMessage(Math.floor(ctx.sampleRate*1.0))});
+let f=0,f2=0,h=-1,h2=-1,peak=0,v;
+for(let i=Math.floor(0.8*silentSamples);i<silentSamples;i++){v=Math.abs(rec[i]);if(v>f)f=v}
+let t=Math.max(f*2,0.02);
+for(let i=silentSamples;i<rec.length;i++){v=Math.abs(rec[i]);if(h<0&&v>t){h=i;peak=v};if(v>f2){h2=i;f2=v}}
+if(h<0){log.textContent = 'TINY RESPONSE (is speaker volume low or mic obstructed?)';
+} else {log.textContent = 'TRIGGERED:\n' +
+    'Recv Sample : ' + h + '\n' +
+    'Latency     : ' + ((h - silentSamples) / ctx.sampleRate * 1000).toFixed(3) + ' ms (' + (h - silentSamples) + ' samples)\n' +
+    'Trigger     : ' + peak.toFixed(4);}
+  log.textContent +=
+    '\n\n' +
+    'Sample Rate : ' + ctx.sampleRate + ' Hz\n' +
+    'Emit Sample : ' + silentSamples + '\n' +
+    'Recv Sample : ' + h2+ '\n' +
+    'Latency     : ' + ((h2- silentSamples) / ctx.sampleRate * 1000).toFixed(3) + ' ms (' + (h2- silentSamples) + ' samples)\n' +
+    'Ambient     : ' + f.toFixed(4) + '\n' +
+    'Threshold   : ' + t.toFixed(4) + '\n' +
+    'Peak        : ' + f2.toFixed(4);
+}catch(e){log.textContent='Error: '+e.message}
+go.disabled=false};
+</script></body></html>
