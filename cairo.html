@@ -40,6 +40,7 @@ const SOME_COLORS = [
   "#eab308", // Gold / Yellow
   "#ec4899"  // Hot Pink
 ];
+const urlHost = window.location.hostname;
 const urlParams = new URLSearchParams(window.location.search);
 let activeColor = urlParams.get('c') || window.location.hash;
 if (!activeColor) {activeColor = '#' + Math.floor(Math.random() * 0xFFFFFF).toString(16).padStart(6, '0'); window.location.hash = activeColor;}
@@ -54,6 +55,9 @@ const diagnosticsQuerySlash = '?file=' + gameDir + '/d/';
 const peersDir = gameDir + '/p';
 const prefix = '/p@i@e@c@e@s/';
 const ID = activeColor.slice(1) + activeText.replace(/[^a-zA-Z0-9]/g, '');
+
+const vpnCount = urlParams.get('vpn') ?? '0';
+const guessPort = (vpnCount != '0');
 
 const canvas = document.getElementById('myCanvas');
 const ctx = canvas.getContext('2d');
@@ -370,11 +374,20 @@ function forgetPC(target) {if (forgetFailedPC > 0 && pcs[target]) {console.warn(
     delete dcs[target]; //dc.onclose does this redundantly, but the browser might trigger this close event with a long delay causing us to reuse the old one and then have that ripped away from us when the browser finishes
     const audioEl = document.getElementById('audio_' + target); if (audioEl) audioEl.remove();}}
 
-function initPC(target, isInitiator) {
-  if (!target || pcs[target]) return pcs[target];
-  const pc = pcs[target] = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun1.l.google.com:19302' }] });
-  //const pc = pcs[target] = new RTCPeerConnection({ iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] });
-  //const pc = pcs[target] = new RTCPeerConnection({ iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478', 'stun:stun.services.mozilla.com:3478'] }] });
+//****do the redundant google servers (1st and 5th and 6th - different names but same numerical IP) here help?
+function initPC(target, isInitiator) {if (!target || pcs[target]) return pcs[target];
+  //const iceServers = guessPort ? [{urls: ['stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478', 'stun:global.stun.twilio.com:3478', 'stun:stun.sipgate.net:3478']}]
+  const iceServers = guessPort ? [{urls: 'stun:stun1.l.google.com:19302'}, {urls: 'stun:stun.cloudflare.com:3478'}, {urls: 'stun:global.stun.twilio.com:3478'}, {urls: 'stun:stun.sipgate.net:3478'}, {urls: 'stun:stun2.l.google.com:19302'}, {urls: 'stun:stun2.l.google.com:19302'}]
+    : [{urls: 'stun:stun1.l.google.com:19302'}, {urls: ['turn:' + urlHost +  ':3478', 'turn:' + urlHost +  ':3478?transport=tcp'], username: 'lamaklamak', credential: 'nunyabizz'}];
+  //[{urls: 'stun:stun1.l.google.com:19302'}, {urls: ['turn:' + urlHost +  ':3478', 'turn:' + urlHost +  ':3478?transport=tcp']}]
+  //[{urls: 'stun:stun1.l.google.com:19302'}, {urls: 'turn:' + urlHost +  ':3478?transport=udp'}] //UDP is default so can be omitted
+  //[{urls: ['stun:stun1.l.google.com:19302', 'turn:' + urlHost +  ':3478?transport=udp']}]
+  //[{urls: 'stun:stun1.l.google.com:19302'}]
+  //[{urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302']}] //seems Google's 3 servers are all identical numerical IP, so it might help normal STUN, but not guessing STUN!
+  //[{urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478', 'stun:stun.services.mozilla.com:3478']}]
+
+//for (let redundancy = 0; redundancy < 1; redundancy++) {
+  const pc = pcs[target] = new RTCPeerConnection({ iceServers });
   pc.onconnectionstatechange = () => {console.error('[Conn State - ' + target + ']', pc.connectionState);
     if (pc.connectionState === 'failed') forgetPC(target); updateConnectedCount();};
   pc.oniceconnectionstatechange = () => console.error('[ICE State - ' + target + ']', pc.iceConnectionState);
@@ -384,9 +397,18 @@ function initPC(target, isInitiator) {
     a.id = 'audio_' + target; a.autoplay = true;
     if (!a.parentNode) document.getElementById('audios').appendChild(a);
     a.srcObject = e.streams[0] || new MediaStream([e.track]);};
+  //pc.onicecandidate = e => {if (e.candidate) {console.log('[STUN cand - ' + target + ']', e.candidate.url, e.candidate.type, e.candidate.address + ':' + e.candidate.port);
+  //  sendSig(target, { candidate: e.candidate });}};
   pc.onicecandidate = e => {if (e.candidate) {console.log('[STUN cand - ' + target + ']', e.candidate.url, e.candidate.type, e.candidate.address + ':' + e.candidate.port);
-      sendSig(target, { candidate: e.candidate });}};
-  pc.onicecandidateerror = e => {console.warn('[STUN fail - ' + target + ']', e.url, 'Err:', e.errorCode, e.errorText);};
+    if (guessPort) {if (e.candidate.type === 'srflx') {
+      const origPort = e.candidate.port; const modCand = e.candidate.toJSON();
+      for (let i = 0; i < 5; i++) {let randPort;
+        do randPort = 1024 + Math.floor(Math.random() * 64512); while (randPort === origPort);
+        modCand.candidate = modCand.candidate.replace(/ \d+ typ srflx /, ' ' + randPort + ' typ srflx ');
+        console.log('  guess: ' + modCand.candidate.split(' ').slice(4, 8).join(' '));
+        sendSig(target, { candidate: modCand });}}}
+    else sendSig(target, { candidate: e.candidate });}};
+  pc.onicecandidateerror = e => {console.warn('[STUN fail - ' + target + ']', e.url, 'Err:', e.errorCode, e.errorText);}; //401 for TURN authentication error
   const attachDC = dc => {dc.onmessage = e => {
       try {locallyAppendMoveIfValid(JSON.parse(e.data)); draw();}
       catch (err) {alert('DataChannel Message Error: ' + err);}};
@@ -402,7 +424,7 @@ function initPC(target, isInitiator) {
     pc.createOffer().then(o => pc.setLocalDescription(o)).then(() => sendSig(target, { sdp: pc.localDescription })).catch(err => console.warn('Initial offer error:' + err));}
   else
     {pc.ondatachannel = e => attachDC(e.channel);}
-
+//}
   return pc;}
 
 const audioConstraints = { echoCancellation: false, noiseSuppression: false, autoGainControl: false }; //****allowing bad audio since these default to true and make jitter buffer about 300ms one-way!
