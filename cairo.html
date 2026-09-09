@@ -55,16 +55,13 @@ const diagnosticsQuerySlash = '?file=' + gameDir + '/d/';
 const peersDir = gameDir + '/p';
 const prefix = '/p@i@e@c@e@s/';
 const ID = activeColor.slice(1) + activeText.replace(/[^a-zA-Z0-9]/g, '');
-
-const vpnCount = urlParams.get('vpn') ?? '0';
-const guessPort = (vpnCount != '0');
+let vpnCount = 0; if (urlParams.has('vpn')) {vpnCount = parseInt(urlParams.get('vpn'), 10); if (isNaN(vpnCount)) vpnCount = 6;}
 
 const canvas = document.getElementById('myCanvas');
 const ctx = canvas.getContext('2d');
 
 const pcs = {}, dcs = {};
 let stream;
-let forgetFailedPC = 1;
 window.addEventListener('beforeunload', (e) => {const hasActiveConnections = Object.keys(pcs).length > 0; if (hasActiveConnections) {e.preventDefault(); e.returnValue = '';}});
 
 const drawScale = 3;
@@ -368,26 +365,28 @@ function updateConnectedCount() {let count = 0; for (const target in pcs) if (pc
   if (connectedPeerCount < count) {micBtn.style.backgroundColor = '#fca5a5'; setTimeout(() => { micBtn.style.backgroundColor = ''; }, 1000);}
   connectedPeerCount = count; updateMicButton();}
 
+let forgetFailedPC = 1;
 function forgetPC(target) {if (forgetFailedPC > 0 && pcs[target]) {console.warn('[Teardown] Clearing dead connection for ' + target);
     pcs[target].close();
     delete pcs[target];
     delete dcs[target]; //dc.onclose does this redundantly, but the browser might trigger this close event with a long delay causing us to reuse the old one and then have that ripped away from us when the browser finishes
     const audioEl = document.getElementById('audio_' + target); if (audioEl) audioEl.remove();}}
 
-//****do the redundant google servers (1st and 5th and 6th - different names but same numerical IP) here help?
 function initPC(target, isInitiator) {if (!target || pcs[target]) return pcs[target];
-  //const iceServers = guessPort ? [{urls: ['stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478', 'stun:global.stun.twilio.com:3478', 'stun:stun.sipgate.net:3478']}]
-  const iceServers = guessPort ? [{urls: 'stun:stun1.l.google.com:19302'}, {urls: 'stun:stun.cloudflare.com:3478'}, {urls: 'stun:global.stun.twilio.com:3478'}, {urls: 'stun:stun.sipgate.net:3478'}, {urls: 'stun:stun2.l.google.com:19302'}, {urls: 'stun:stun2.l.google.com:19302'}]
+  //const iceServers = (vpnCount > 0) ? [{urls: ['stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478', 'stun:global.stun.twilio.com:3478', 'stun:stun.sipgate.net:3478']}]
+  //const iceServers = (vpnCount > 0) ? [{urls: 'stun:stun1.l.google.com:19302'}, {urls: 'stun:stun.cloudflare.com:3478'}, {urls: 'stun:global.stun.twilio.com:3478'}, {urls: 'stun:stun.sipgate.net:3478'}, {urls: 'stun:stun2.l.google.com:19302'}, {urls: 'stun:stun2.l.google.com:19302'}]
+  //const iceServers = (vpnCount > 0) ? [{urls: ['stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478']}] //supposedly this [1,2] method only goes to 2nd if 1st fails, but other {1},{2} method does both in parallel
+  const iceServers = (vpnCount > 0) ? [{urls: 'stun:stun1.l.google.com:19302'}, {urls: 'stun:stun.cloudflare.com:3478'}]
     : [{urls: 'stun:stun1.l.google.com:19302'}, {urls: ['turn:' + urlHost +  ':3478', 'turn:' + urlHost +  ':3478?transport=tcp'], username: 'lamaklamak', credential: 'nunyabizz'}];
   //[{urls: 'stun:stun1.l.google.com:19302'}, {urls: ['turn:' + urlHost +  ':3478', 'turn:' + urlHost +  ':3478?transport=tcp']}]
   //[{urls: 'stun:stun1.l.google.com:19302'}, {urls: 'turn:' + urlHost +  ':3478?transport=udp'}] //UDP is default so can be omitted
   //[{urls: ['stun:stun1.l.google.com:19302', 'turn:' + urlHost +  ':3478?transport=udp']}]
   //[{urls: 'stun:stun1.l.google.com:19302'}]
-  //[{urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302']}] //seems Google's 3 servers are all identical numerical IP, so it might help normal STUN, but not guessing STUN!
+  //[{urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302']}] //seems Google's 3 servers are all identical numerical IP => Wireshark shows that IP only gets STUN'ned once even when listed multiply
   //[{urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478', 'stun:stun.services.mozilla.com:3478']}]
 
 //for (let redundancy = 0; redundancy < 1; redundancy++) {
-  const pc = pcs[target] = new RTCPeerConnection({ iceServers });
+  const pc = pcs[target] = new RTCPeerConnection({ iceServers }); pc.createdAt = Date.now();
   pc.onconnectionstatechange = () => {console.error('[Conn State - ' + target + ']', pc.connectionState);
     if (pc.connectionState === 'failed') forgetPC(target); updateConnectedCount();};
   pc.oniceconnectionstatechange = () => console.error('[ICE State - ' + target + ']', pc.iceConnectionState);
@@ -397,18 +396,17 @@ function initPC(target, isInitiator) {if (!target || pcs[target]) return pcs[tar
     a.id = 'audio_' + target; a.autoplay = true;
     if (!a.parentNode) document.getElementById('audios').appendChild(a);
     a.srcObject = e.streams[0] || new MediaStream([e.track]);};
-  //pc.onicecandidate = e => {if (e.candidate) {console.log('[STUN cand - ' + target + ']', e.candidate.url, e.candidate.type, e.candidate.address + ':' + e.candidate.port);
-  //  sendSig(target, { candidate: e.candidate });}};
   pc.onicecandidate = e => {if (e.candidate) {console.log('[STUN cand - ' + target + ']', e.candidate.url, e.candidate.type, e.candidate.address + ':' + e.candidate.port);
-    if (guessPort) {if (e.candidate.type === 'srflx') {
-      const origPort = e.candidate.port; const modCand = e.candidate.toJSON();
-      for (let i = 0; i < 5; i++) {let randPort;
-        do randPort = 1024 + Math.floor(Math.random() * 64512); while (randPort === origPort);
-        modCand.candidate = modCand.candidate.replace(/ \d+ typ srflx /, ' ' + randPort + ' typ srflx ');
-        console.log('  guess: ' + modCand.candidate.split(' ').slice(4, 8).join(' '));
-        sendSig(target, { candidate: modCand });}}}
+    if (vpnCount > 0) {if (e.candidate.type == 'srflx') {console.log('  RANDOMIZED *' + vpnCount);
+      const origPort = e.candidate.port; const baseStr = JSON.stringify({ from: ID, candidate: e.candidate });
+      let totalString = ''; for (let i = 0; i < vpnCount; i++) {let randPort;
+        do randPort = 1024 + Math.floor(Math.random() * 64512); while (randPort == origPort);
+        totalString += (i ? ',' : '') + baseStr.replace(/ \d+ typ srflx /, ' ' + randPort + ' typ srflx ');}
+      fetch(prefix + 'append.sh' + signalsQuerySlash + target, { method: 'POST', body: totalString })
+        .catch(err => console.warn('Send Batch Signal Error: ' + err));}}
     else sendSig(target, { candidate: e.candidate });}};
-  pc.onicecandidateerror = e => {console.warn('[STUN fail - ' + target + ']', e.url, 'Err:', e.errorCode, e.errorText);}; //401 for TURN authentication error
+  pc.onicecandidateerror = e => {console.warn('[STUN fail - ' + target + ']', e.url, '->', e.address, ' reflects ', e.hostCandidate, 'Err:', e.errorCode, e.errorText);
+    if (e.errorCode == 701) console.warn('  Error 701 - Does this STUN server only have IPv4 addresses, but the local IPv6 candidate possibility wanted an IPv6 address from DNS?\n  Ignorable if the local IPv4 candidate succeeded on the same STUN server.');}; //401 for TURN authentication error
   const attachDC = dc => {dc.onmessage = e => {
       try {locallyAppendMoveIfValid(JSON.parse(e.data)); draw();}
       catch (err) {alert('DataChannel Message Error: ' + err);}};
@@ -434,8 +432,7 @@ const startVoice = async () => {
     if (!stream) stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
     let audioTrack = stream.getAudioTracks()[0];
     if (!audioTrack || audioTrack.readyState !== 'live') {stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints }); audioTrack = stream.getAudioTracks()[0];}
-    for (const target in pcs) {
-      const pc = pcs[target];
+    for (const target in pcs) {const pc = pcs[target];
       const t = pc.getTransceivers().find(tr => tr.receiver.track.kind === 'audio');
       if (t && t.sender) {
         t.direction = 'sendrecv';
@@ -455,10 +452,15 @@ const toggleVoice = async () => {
 
 const sendSig = (to, body) => fetch(prefix + 'append.sh' + signalsQuerySlash + to, { method: 'POST', body: JSON.stringify({ from: ID, ...body }) }).catch(err => console.warn('Send Signal Error: ' + err));
 
-let nextDelayDefault = 1500;//nextDelayDefault = 150000; in console will effectively stop polling for debugging
+let pollingInterval = 1500;//pollingInterval = 150000; in console will effectively stop polling for debugging
+let fastInterval = Math.floor(pollingInterval * 0.2);
+let vpnTimeout = Math.floor(pollingInterval * 2.8);
 let fastPollRemainingCount = 0;
 const poll = async () => {
   try {
+    if (vpnCount > 0) {for (const target in pcs) {const pc = pcs[target];
+      if ((pc.connectionState != 'connected') && (Date.now() >= pc.createdAt + vpnTimeout)) {console.warn('[VPN Cycle] Re-cycling connection for ' + target); forgetPC(target); initPC(target, true);}}}
+
     const sRes = await fetch(prefix + 'mv_rm.sh' + signalsQuerySlash + ID + '&peer=' + peersDir + '/' + ID, { cache: 'no-store' });
     if (sRes.ok) {const list = await sRes.json();
       for (const s of list) {if (!s.from || s.from === ID) continue;
@@ -500,8 +502,8 @@ const poll = async () => {
         }}
       peersL = peersLnew;}
   } catch (err) { console.warn('Signaling Loop Error: ' + err); }
-finally { if (fastPollRemainingCount > 0) {fastPollRemainingCount--; setTimeout(poll, 300);} else {setTimeout(poll, nextDelayDefault);} }};
-//****check access logs for timing of signals on next call to Florida to make sure 300ms is usually helping, or to see if I should shorten it further
+finally { if (fastPollRemainingCount > 0) {fastPollRemainingCount--; setTimeout(poll, fastInterval);} else {setTimeout(poll, pollingInterval);} }};
+//****check access logs for timing of signals on next call to Florida to make sure fastInterval~300ms is usually helping, or to see if I should shorten it further
 
 const loadBoard = () => fetch(prefix + 'cat.sh' + movesQuery, { cache: 'no-store' })
   .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
