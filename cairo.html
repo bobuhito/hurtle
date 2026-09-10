@@ -41,7 +41,7 @@ const SOME_COLORS = [
   "#ec4899"  // Hot Pink
 ];
 const urlHost = window.location.hostname;
-const urlParams = new URLSearchParams(window.location.search); //https://site.com?c=0&t=A&g=c&vpn=0&stun=2&fast=0
+const urlParams = new URLSearchParams(window.location.search); //https://site.com?c=0&t=A&g=c&vpn=-1&stun=2&fast=0 forces only public IPs
 let activeColor = urlParams.get('c') || window.location.hash;
 if (!activeColor) {activeColor = '#' + Math.floor(Math.random() * 0xFFFFFF).toString(16).padStart(6, '0'); window.location.hash = activeColor;}
 else if (activeColor.length == 1) activeColor = SOME_COLORS[activeColor] || SOME_COLORS[0];
@@ -60,6 +60,9 @@ let enableTimeout = vpnCount;
 let vpnTryForget = 1;
 let vpnTryOffer = 0; //****easyForget = 0 is probably best when setting vpnTryOffer > 0
 let vpnTryPorts = 0;
+//vpnTryForget = 1; vpnTryOffer = 0; vpnTryPorts = 0;
+//vpnTryForget = 0; vpnTryOffer = 1; vpnTryPorts = 0;
+//vpnTryForget = 0; vpnTryOffer = 0; vpnTryPorts = 1;
 
 //URL's ?stun=0 is default which allows turn, ?stun=1 has no turn and 1 stun server, etc
 let onlyStun = 0; if (vpnCount > 0) onlyStun = 2;
@@ -424,7 +427,7 @@ function initPC(target, isInitiator) {if (!target || pcs[target]) return pcs[tar
       fetch(prefix + 'append.sh' + signalsQuerySlash + target, { method: 'POST', body: totalString })
         .catch(err => console.warn('Send Batch Signal Error: ' + err));
 
-    }} else sendSig(target, { candidate: e.candidate });}};
+    }} else if ((vpnCount == 0) || (e.candidate.type == 'srflx')) sendSig(target, { candidate: e.candidate });}}; //****debug with "?vpn=-1" by ignoring LAN candidates
   pc.onicecandidateerror = e => {console.warn('[STUN fail - ' + target + ']', e.url, '->', e.address, ' reflects ', e.hostCandidate, 'Err:', e.errorCode, e.errorText);
     if (e.errorCode == 486) console.warn('  Error 486 - TURN server (--total-quota) is probably full (needs 4 per peer!)');
     if (e.errorCode == 701) console.warn('  Error 701 - Does this STUN server only have IPv4 addresses, but the local IPv6 candidate possibility wanted an IPv6 address from DNS?\n  Ignorable if the local IPv4 candidate succeeded on the same STUN server.');}; //401 for TURN authentication error
@@ -484,9 +487,9 @@ const poll = async () => {
       for (const s of list) {if (!s.from || s.from === ID) continue;
         let pc = pcs[s.from];
         if (pc) {
-          if  ((easyForget > 0) && (vpnCount == 0 || s.from < ID) && s.sdp && s.sdp.type === 'offer') { //FASTEST****(4 total changes needed): comment out this teardown (or force this "if check" to always be false) since both sides intentionally then send offer
+          if  ((easyForget > 0) && (vpnCount <= 0 || s.from < ID) && s.sdp && s.sdp.type === 'offer') { //FASTEST****(4 total changes needed): comment out this teardown (or force this "if check" to always be false) since both sides intentionally then send offer
             if (easyForget > 1) {forgetPC(s.from); pc = initPC(s.from, false);}
-            else {try {await pc.setLocalDescription({ type: 'rollback' });} catch (err) {console.error('Rollback Error: ' + err);}}}}
+            else {try {await pc.setLocalDescription({ type: 'rollback' }); pc.createdAt = Date.now();} catch (err) {console.error('Rollback Error: ' + err);}}}}
         else pc = initPC(s.from, false);
 
         if (!pc.iceQueue) pc.iceQueue = [];
@@ -513,15 +516,15 @@ const poll = async () => {
           else pc.iceQueue.push(s.candidate);}
     }}
 
-    if (enableTimeout > 0) {for (const target in pcs) {const pc = pcs[target];
+    if (enableTimeout > 0) {for (const target in pcs) {let pc = pcs[target];
       if ((pc.connectionState != 'connected') && (Date.now() >= pc.createdAt + vpnTimeout)) {console.warn('[VPN Cycle] Re-cycling connection for ' + target);
         if (vpnTryForget > 0) {forgetPC(target); pc = initPC(target, true);}
-        if (vpnTryOffer > 0) {pc.createdAt = Date.now(); //pc.restartIce(); could be added but should be equivalent
+        if (vpnTryOffer > 0) {pc.createdAt = Date.now(); pc.origPortList = []; pc.candStrList = []; //pc.restartIce(); could be added but should be equivalent
           pc.createOffer({ iceRestart: true }).then(o => pc.setLocalDescription(o)).then(() => sendSig(target, { sdp: pc.localDescription })).catch(err => console.warn('iceRestart offer error:' + err));}
         if (vpnTryPorts > 0) {pc.createdAt = Date.now();
           resendRandomCans(target);} //Give peer more guesses
     }}}
-    //11:10 AM 9/10/2026: (vpnCount == 0 || s.from < ID) added in "easyForget block" above to reduce "glare" "race condition" between peers who both have "?vpn" (i.e., both have vpnCount != 0).  Without this change, here is the "glare" problem:
+    //11:10 AM 9/10/2026: (vpnCount <= 0 || s.from < ID) added in "easyForget block" above to reduce "glare" "race condition" between peers who both have "?vpn" (i.e., both have vpnCount > 0).  Without this change, here is the "glare" problem:
     //  If both timeout at nearly the same time, they both re-cycle and become offerers in poll#1 (resets createdAt),
     //  which makes them both stand down in easyForget and become answerers in poll#2 (resets createdAt),
     //  which makes them both receive answers in poll#3 though they are answerers!
