@@ -41,7 +41,7 @@ const SOME_COLORS = [
   "#ec4899"  // Hot Pink
 ];
 const urlHost = window.location.hostname;
-const urlParams = new URLSearchParams(window.location.search);
+const urlParams = new URLSearchParams(window.location.search); //https://site.com?c=0&t=A&g=c&vpn=0&stun=2&fast=0
 let activeColor = urlParams.get('c') || window.location.hash;
 if (!activeColor) {activeColor = '#' + Math.floor(Math.random() * 0xFFFFFF).toString(16).padStart(6, '0'); window.location.hash = activeColor;}
 else if (activeColor.length == 1) activeColor = SOME_COLORS[activeColor] || SOME_COLORS[0];
@@ -56,6 +56,19 @@ const peersDir = gameDir + '/p';
 const prefix = '/p@i@e@c@e@s/';
 const ID = activeColor.slice(1) + activeText.replace(/[^a-zA-Z0-9]/g, '');
 let vpnCount = 0; if (urlParams.has('vpn')) {vpnCount = parseInt(urlParams.get('vpn'), 10); if (isNaN(vpnCount)) vpnCount = 6;}
+let enableTimeout = vpnCount;
+let vpnTryForget = 1;
+let vpnTryOffer = 0; //****easyForget = 0 is probably best when setting vpnTryOffer > 0
+let vpnTryPorts = 0;
+
+//URL's ?stun=0 is default which allows turn, ?stun=1 has no turn and 1 stun server, etc
+let onlyStun = 0; if (vpnCount > 0) onlyStun = 2;
+if (urlParams.has('stun')) {onlyStun = parseInt(urlParams.get('stun'), 10); if (isNaN(onlyStun)) onlyStun = 1;}
+
+let enableForget = 1;
+let easyForget = 2;
+let fastInit = 0;
+if (urlParams.has('fast')) {fastInit = parseInt(urlParams.get('fast'), 10); if (isNaN(fastInit)) fastInit = 1;}
 
 const canvas = document.getElementById('myCanvas');
 const ctx = canvas.getContext('2d');
@@ -306,7 +319,7 @@ chatBox.addEventListener('keydown', e => {if (e.key === 'Enter' && !e.shiftKey) 
     let i = 0; while (i < totalText.length && i < currentVal.length && totalText[i] === currentVal[i]) i++;
     const m = currentVal.slice(i);
     if (m.trim()) {const payload = JSON.stringify(m);
-      for (const target in dcs) {if (dcs[target].readyState === 'open') dcs[target].send(payload);}
+      for (const target in dcs) {if (dcs[target].readyState == 'open') dcs[target].send(payload);}
       totalText += m + '\n'; chatBox.value = totalText; chatBox.scrollTop = chatBox.scrollHeight;
     }}});
 
@@ -361,32 +374,37 @@ let connectedPeerCount = 0;
 let peersL = 2; //this is "my total peers plus two", or "total peers including me plus one", or "connectedPeerCount plus any unconnected plus any reloaded peer multiplicty plus me plus one"  //"ls.sh" below returns my own peer ID plus an ending blank item which together add two
 function updateMicButton() {if (isVoiceOn) micBtn.innerHTML = '<b>Mic to ' + connectedPeerCount + '/' + (peersL-2) + '</b><br>&nbsp;&#127908;&nbsp;';
   else micBtn.innerHTML = '<b>muted to ' + connectedPeerCount + '/' + (peersL-2) + '</b><br><span style="text-decoration: line-through 2px;">&nbsp;&#127908;&nbsp;</span>';}
-function updateConnectedCount() {let count = 0; for (const target in pcs) if (pcs[target].connectionState === 'connected') count++;
+function updateConnectedCount() {let count = 0; for (const target in pcs) if (pcs[target].connectionState == 'connected') count++;
   if (connectedPeerCount < count) {micBtn.style.backgroundColor = '#fca5a5'; setTimeout(() => { micBtn.style.backgroundColor = ''; }, 1000);}
   connectedPeerCount = count; updateMicButton();}
 
-let forgetFailedPC = 1;
-function forgetPC(target) {if (forgetFailedPC > 0 && pcs[target]) {console.warn('[Teardown] Clearing dead connection for ' + target);
+
+function forgetPC(target) {if ((enableForget > 0) && pcs[target]) {console.warn('[Teardown] Clearing dead connection for ' + target);
     pcs[target].close();
     delete pcs[target];
     delete dcs[target]; //dc.onclose does this redundantly, but the browser might trigger this close event with a long delay causing us to reuse the old one and then have that ripped away from us when the browser finishes
     const audioEl = document.getElementById('audio_' + target); if (audioEl) audioEl.remove();}}
 
-function initPC(target, isInitiator) {if (!target || pcs[target]) return pcs[target];
-  //const iceServers = (vpnCount > 0) ? [{urls: ['stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478', 'stun:global.stun.twilio.com:3478', 'stun:stun.sipgate.net:3478']}]
-  //const iceServers = (vpnCount > 0) ? [{urls: 'stun:stun1.l.google.com:19302'}, {urls: 'stun:stun.cloudflare.com:3478'}, {urls: 'stun:global.stun.twilio.com:3478'}, {urls: 'stun:stun.sipgate.net:3478'}, {urls: 'stun:stun2.l.google.com:19302'}, {urls: 'stun:stun2.l.google.com:19302'}]
-  //const iceServers = (vpnCount > 0) ? [{urls: ['stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478']}] //supposedly this [1,2] method only goes to 2nd if 1st fails, but other {1},{2} method does both in parallel
-  const iceServers = (vpnCount > 0) ? [{urls: 'stun:stun1.l.google.com:19302'}, {urls: 'stun:stun.cloudflare.com:3478'}]
-    : [{urls: 'stun:stun1.l.google.com:19302'}, {urls: ['turn:' + urlHost +  ':3478', 'turn:' + urlHost +  ':3478?transport=tcp'], username: 'lamaklamak', credential: 'nunyabizz'}];
-  //[{urls: 'stun:stun1.l.google.com:19302'}, {urls: ['turn:' + urlHost +  ':3478', 'turn:' + urlHost +  ':3478?transport=tcp']}]
-  //[{urls: 'stun:stun1.l.google.com:19302'}, {urls: 'turn:' + urlHost +  ':3478?transport=udp'}] //UDP is default so can be omitted
-  //[{urls: ['stun:stun1.l.google.com:19302', 'turn:' + urlHost +  ':3478?transport=udp']}]
-  //[{urls: 'stun:stun1.l.google.com:19302'}]
-  //[{urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302']}] //seems Google's 3 servers are all identical numerical IP => Wireshark shows that IP only gets STUN'ned once even when listed multiply
-  //[{urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478', 'stun:stun.services.mozilla.com:3478']}]
+const sendSig = (to, body) => fetch(prefix + 'append.sh' + signalsQuerySlash + to, { method: 'POST', body: JSON.stringify({ from: ID, ...body }) }).catch(err => console.warn('Send Signal Error: ' + err));
 
+function resendRandomCans(target) {const pc = pcs[target]; if (!pc || !pc.origPortList || !pc.origPortList.length) return;
+  console.log('  RANDOMIZED AGAIN *' + vpnCount + '*' + pc.origPortList.length); let totalString = '';
+  for (let idx = 0; idx < pc.origPortList.length; idx++) {const origPort = pc.origPortList[idx]; const candStr = pc.candStrList[idx];
+      for (let i = 0; i < vpnCount; i++) {let randPort; do randPort = 1024 + Math.floor(Math.random() * 64512); while (randPort == origPort);
+        totalString += (totalString ? ',' : '') + candStr.replace(/ \d+ typ srflx /, ' ' + randPort + ' typ srflx ');}}
+      fetch(prefix + 'append.sh' + signalsQuerySlash + target, { method: 'POST', body: totalString })
+        .catch(err => console.warn('Send Batch Signal Error: ' + err));}
+
+let iceServers;
+if      (onlyStun == 0) iceServers = [{urls: ['stun:stun1.l.google.com:19302',         'stun:stun.cloudflare.com:3478']}, {urls: ['turn:' + urlHost + ':3478', 'turn:' + urlHost + ':3478?transport=tcp'], username: 'lamaklamak', credential: 'nunyabizz'}];
+else if (onlyStun == 1) iceServers = [{urls:  'stun:stun1.l.google.com:19302'}];
+else if (onlyStun == 2) iceServers = [{urls: ['stun:stun1.l.google.com:19302',         'stun:stun.cloudflare.com:3478']}];
+else                    iceServers = [{urls:  'stun:stun1.l.google.com:19302'}, {urls: 'stun:stun.cloudflare.com:3478'}];
+
+function initPC(target, isInitiator) {if (!target || pcs[target]) return pcs[target];
 //for (let redundancy = 0; redundancy < 1; redundancy++) {
-  const pc = pcs[target] = new RTCPeerConnection({ iceServers }); pc.createdAt = Date.now();
+  const pc = pcs[target] = new RTCPeerConnection({ iceServers });
+  pc.createdAt = Date.now(); pc.origPortList = []; pc.candStrList = []; //just for VPN
   pc.onconnectionstatechange = () => {console.error('[Conn State - ' + target + ']', pc.connectionState);
     if (pc.connectionState === 'failed') forgetPC(target); updateConnectedCount();};
   pc.oniceconnectionstatechange = () => console.error('[ICE State - ' + target + ']', pc.iceConnectionState);
@@ -397,15 +415,18 @@ function initPC(target, isInitiator) {if (!target || pcs[target]) return pcs[tar
     if (!a.parentNode) document.getElementById('audios').appendChild(a);
     a.srcObject = e.streams[0] || new MediaStream([e.track]);};
   pc.onicecandidate = e => {if (e.candidate) {console.log('[STUN cand - ' + target + ']', e.candidate.url, e.candidate.type, e.candidate.address + ':' + e.candidate.port);
-    if (vpnCount > 0) {if (e.candidate.type == 'srflx') {console.log('  RANDOMIZED *' + vpnCount);
-      const origPort = e.candidate.port; const baseStr = JSON.stringify({ from: ID, candidate: e.candidate });
-      let totalString = ''; for (let i = 0; i < vpnCount; i++) {let randPort;
-        do randPort = 1024 + Math.floor(Math.random() * 64512); while (randPort == origPort);
-        totalString += (i ? ',' : '') + baseStr.replace(/ \d+ typ srflx /, ' ' + randPort + ' typ srflx ');}
+    if (vpnCount > 0) {if (e.candidate.type == 'srflx') {const origPort = e.candidate.port; pc.origPortList.push(origPort); const candStr = JSON.stringify({ from: ID, candidate: e.candidate }); pc.candStrList.push(candStr);
+
+      console.log('  RANDOMIZED *' + vpnCount); let totalString = '';
+      //THIS BLOCK IS COPIED from resendRandomCans above
+      for (let i = 0; i < vpnCount; i++) {let randPort; do randPort = 1024 + Math.floor(Math.random() * 64512); while (randPort == origPort);
+        totalString += (i ? ',' : '') + candStr.replace(/ \d+ typ srflx /, ' ' + randPort + ' typ srflx ');}
       fetch(prefix + 'append.sh' + signalsQuerySlash + target, { method: 'POST', body: totalString })
-        .catch(err => console.warn('Send Batch Signal Error: ' + err));}}
-    else sendSig(target, { candidate: e.candidate });}};
+        .catch(err => console.warn('Send Batch Signal Error: ' + err));
+
+    }} else sendSig(target, { candidate: e.candidate });}};
   pc.onicecandidateerror = e => {console.warn('[STUN fail - ' + target + ']', e.url, '->', e.address, ' reflects ', e.hostCandidate, 'Err:', e.errorCode, e.errorText);
+    if (e.errorCode == 486) console.warn('  Error 486 - TURN server (--total-quota) is probably full (needs 4 per peer!)');
     if (e.errorCode == 701) console.warn('  Error 701 - Does this STUN server only have IPv4 addresses, but the local IPv6 candidate possibility wanted an IPv6 address from DNS?\n  Ignorable if the local IPv4 candidate succeeded on the same STUN server.');}; //401 for TURN authentication error
   const attachDC = dc => {dc.onmessage = e => {
       try {locallyAppendMoveIfValid(JSON.parse(e.data)); draw();}
@@ -424,6 +445,7 @@ function initPC(target, isInitiator) {if (!target || pcs[target]) return pcs[tar
     {pc.ondatachannel = e => attachDC(e.channel);}
 //}
   return pc;}
+
 
 const audioConstraints = { echoCancellation: false, noiseSuppression: false, autoGainControl: false }; //****allowing bad audio since these default to true and make jitter buffer about 300ms one-way!
 const startVoice = async () => {
@@ -450,7 +472,6 @@ const toggleVoice = async () => {
   else await startVoice();
   updateMicButton();};
 
-const sendSig = (to, body) => fetch(prefix + 'append.sh' + signalsQuerySlash + to, { method: 'POST', body: JSON.stringify({ from: ID, ...body }) }).catch(err => console.warn('Send Signal Error: ' + err));
 
 let pollingInterval = 1500;//pollingInterval = 150000; in console will effectively stop polling for debugging
 let fastInterval = Math.floor(pollingInterval * 0.2);
@@ -458,14 +479,16 @@ let vpnTimeout = Math.floor(pollingInterval * 2.8);
 let fastPollRemainingCount = 0;
 const poll = async () => {
   try {
-    if (vpnCount > 0) {for (const target in pcs) {const pc = pcs[target];
-      if ((pc.connectionState != 'connected') && (Date.now() >= pc.createdAt + vpnTimeout)) {console.warn('[VPN Cycle] Re-cycling connection for ' + target); forgetPC(target); initPC(target, true);}}}
-
     const sRes = await fetch(prefix + 'mv_rm.sh' + signalsQuerySlash + ID + '&peer=' + peersDir + '/' + ID, { cache: 'no-store' });
     if (sRes.ok) {const list = await sRes.json();
       for (const s of list) {if (!s.from || s.from === ID) continue;
-        if (s.sdp && s.sdp.type === 'offer') forgetPC(s.from); //FASTEST****(4 total changes needed): comment out this teardown since both sides intentionally then send offer
-        const pc = pcs[s.from] || initPC(s.from, false);
+        let pc = pcs[s.from];
+        if (pc) {
+          if  ((easyForget > 0) && (vpnCount == 0 || s.from < ID) && s.sdp && s.sdp.type === 'offer') { //FASTEST****(4 total changes needed): comment out this teardown (or force this "if check" to always be false) since both sides intentionally then send offer
+            if (easyForget > 1) {forgetPC(s.from); pc = initPC(s.from, false);}
+            else {try {await pc.setLocalDescription({ type: 'rollback' });} catch (err) {console.error('Rollback Error: ' + err);}}}}
+        else pc = initPC(s.from, false);
+
         if (!pc.iceQueue) pc.iceQueue = [];
         if (s.sdp) {
           try {
@@ -489,6 +512,22 @@ const poll = async () => {
           if (pc.remoteDescription) await pc.addIceCandidate(s.candidate).catch(err => console.warn('ICE add error: ' + err));
           else pc.iceQueue.push(s.candidate);}
     }}
+
+    if (enableTimeout > 0) {for (const target in pcs) {const pc = pcs[target];
+      if ((pc.connectionState != 'connected') && (Date.now() >= pc.createdAt + vpnTimeout)) {console.warn('[VPN Cycle] Re-cycling connection for ' + target);
+        if (vpnTryForget > 0) {forgetPC(target); pc = initPC(target, true);}
+        if (vpnTryOffer > 0) {pc.createdAt = Date.now(); //pc.restartIce(); could be added but should be equivalent
+          pc.createOffer({ iceRestart: true }).then(o => pc.setLocalDescription(o)).then(() => sendSig(target, { sdp: pc.localDescription })).catch(err => console.warn('iceRestart offer error:' + err));}
+        if (vpnTryPorts > 0) {pc.createdAt = Date.now();
+          resendRandomCans(target);} //Give peer more guesses
+    }}}
+    //11:10 AM 9/10/2026: (vpnCount == 0 || s.from < ID) added in "easyForget block" above to reduce "glare" "race condition" between peers who both have "?vpn" (i.e., both have vpnCount != 0).  Without this change, here is the "glare" problem:
+    //  If both timeout at nearly the same time, they both re-cycle and become offerers in poll#1 (resets createdAt),
+    //  which makes them both stand down in easyForget and become answerers in poll#2 (resets createdAt),
+    //  which makes them both receive answers in poll#3 though they are answerers!
+    //    => Console shows a "SDP handling error" "[incoming sdp.type: answer, signalingState: stable, iceState: checking]"
+    //Could additionally randomize polling interval time if we really expect two such VPN peers
+
     const pRes = await fetch(prefix + 'ls.sh?file=' + peersDir, { cache: 'no-store' });  //NEW METHOD: returns a string which is comma-separated elements like bob,alice,134, (has ending comma; unique "empty list" response adds asterisk: *,)
     if (pRes.ok) {const peers = (await pRes.text()).split(',');
       const peersLnew = peers.length; if (peersLnew < 3) console.warn('just me in peers (returns * if peersDir does not exist; also seen on rare occasion when Segmentation Fault occurs during sed string sterilization, causing no_file): (' + peers[0] + ')');
@@ -496,7 +535,7 @@ const poll = async () => {
       for (const target of peers) {
         if (target.length < 6) console.error('ERROR: peer name (' + target + ') should start with 6 color characters, but returns * if peersDir does not exist (which occurs on rare occasion when Segmentation Fault occurs during sed string sterilization, causing no_file)');
         else if (ID !== target && !pcs[target]) {
-          if (ID < target)  //FASTEST****(4 total changes needed): comment this "if (ID < target)" requirement out (and remove the entire else clause out so we never change nextDelay), so both peers initiate (and thereby get ICE candidates immediately, which is the whole point of "FASTEST") simultaneously
+          if (fastInit > 0 || ID < target)  //FASTEST****(4 total changes needed): comment this "if (ID < target)" requirement out (and remove the entire else clause out so we never change nextDelay), so both peers initiate (and thereby get ICE candidates immediately, which is the whole point of "FASTEST") simultaneously
             initPC(target, true);
           else if (peersL < peersLnew) fastPollRemainingCount = 6;
         }}
@@ -568,7 +607,7 @@ function doPlace() {if (hoveredMidIdx !== -1 && candidates.length > 0) {const se
   if (!locallyAppendMoveIfValid(selected)) return;
   midsLast = mids.length;
   hoveredMidIdx = -1; draw();
-  const payload = JSON.stringify(selected); for (const target in dcs) {if (dcs[target].readyState === 'open') dcs[target].send(payload);}
+  const payload = JSON.stringify(selected); for (const target in dcs) {if (dcs[target].readyState == 'open') dcs[target].send(payload);}
   if (isSyncing) {fetch(prefix + 'append.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Post Move Error: ' + err));}
   stringifyStats().then(statsStr => fetch(prefix + 'append.sh' + diagnosticsQuerySlash + ID, { method: 'POST', body: statsStr })).catch(err => console.warn('Diagnostics Log Error: ' + err));
 } else doToggle();} //to help touchscreen case, let's toggle whenever no tile was placable
@@ -599,7 +638,7 @@ function undo() {if (undoStack.length !== 0) {  //undo feature currently stops s
   if (midsLast > mids.length) midsLast = mids.length;
   lastAction.pairedIndices.forEach(idx => {if (idx < mids.length) blockedMids[idx] = 0;});
   hoveredMidIdx = -1; draw();
-  const payload = JSON.stringify([]); for (const target in dcs) {if (dcs[target].readyState === 'open') dcs[target].send(payload);} //send empty move to peers to make their Sync buttons red (since moves I now make that they receive are not officially being registered)
+  const payload = JSON.stringify([]); for (const target in dcs) {if (dcs[target].readyState == 'open') dcs[target].send(payload);} //send empty move to peers to make their Sync buttons red (since moves I now make that they receive are not officially being registered)
 }}
 
 function doReset() {if (confirm("Are you sure you want to clear the board for all connected players?")) {
