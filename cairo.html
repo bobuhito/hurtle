@@ -49,9 +49,9 @@ else if (!activeColor.startsWith('#')) activeColor = '#' + activeColor;
 
 const activeText = urlParams.get('t') ?? '';
 const gameDir = urlParams.get('g') ?? 'c';
-const movesQuery = '?file=' + gameDir + '/moves';
-const signalsQuery = '?file=' + gameDir + '/s/';
-const diagnosticsQuery = '?file=' + gameDir + '/d/';
+const movesQuery = '&file=' + gameDir + '/moves';
+const signalsQuery = '&file=' + gameDir + '/s/';
+const diagnosticsQuery = '&file=' + gameDir + '/d/';
 const peersDir = gameDir + '/p/';
 const prefix = '/p@i@e@c@e@s/?task=';
 const ID = activeColor.slice(1) + activeText.replace(/[^a-zA-Z0-9]/g, '');
@@ -191,7 +191,7 @@ function draw() {
     ctx.textBaseline = 'middle';
     ctx.fillText(m[6] ?? "", pentagonCenter[0], pentagonCenter[1]);
     i += mids0L;}
- while (i < mids.length) {const m = mids[i]; setMidTransform(m);  //HOW CAN I MAKE THIS LOOP'S TILES LOOK DIFFERENT???
+ while (i < mids.length) {const m = mids[i]; setMidTransform(m);
     ctx.fillStyle = typeof m[5] === 'string' ? m[5] : (SOME_COLORS[m[5]] || SOME_COLORS[0]);
     ctx.fill(pentagonPath);
     ctx.strokeStyle = '#f59e0b';  // Gold accent color
@@ -533,7 +533,7 @@ const poll = async () => {
     //Even with this change, the lower ID can get an answer after being stable because (I think) it gives an offer, but then reads the old answer, so the new answer comes later?
 
     //****change order to do this ls peer check before the mv_rm signals check?
-    const pRes = await fetch(prefix + 'ls?file=' + peersDir + ID, { cache: 'no-store' });  //returns a string which is comma-separated elements like bob,alice,134, (has ending comma; unique "empty list" response adds asterisk: *,)
+    const pRes = await fetch(prefix + 'ls&file=' + peersDir + ID, { cache: 'no-store' });  //returns a string which is comma-separated elements like bob,alice,134, (has ending comma; unique "empty list" response adds asterisk: *,)
     if (pRes.ok) {const peers = (await pRes.text()).split(',');
       const peersLnew = peers.length; if (peersLnew < 3) console.warn('just me in peers (returns * if peersDir does not exist; also seen on rare occasion when Segmentation Fault occurs during sed string sterilization, causing no_file): (' + peers[0] + ')');
       const last = peers.pop(); if (last !== '') alert('ERROR: peer name (' + last + ') without trailing comma');
