@@ -50,10 +50,10 @@ else if (!activeColor.startsWith('#')) activeColor = '#' + activeColor;
 const activeText = urlParams.get('t') ?? '';
 const gameDir = urlParams.get('g') ?? 'c';
 const movesQuery = '?file=' + gameDir + '/moves';
-const signalsQuerySlash = '?file=' + gameDir + '/s/';
-const diagnosticsQuerySlash = '?file=' + gameDir + '/d/';
-const peersDir = gameDir + '/p';
-const prefix = '/p@i@e@c@e@s/';
+const signalsQuery = '?file=' + gameDir + '/s/';
+const diagnosticsQuery = '?file=' + gameDir + '/d/';
+const peersDir = gameDir + '/p/';
+const prefix = '/p@i@e@c@e@s/?task=';
 const ID = activeColor.slice(1) + activeText.replace(/[^a-zA-Z0-9]/g, '');
 let vpnCount = 0; if (urlParams.has('vpn')) {vpnCount = parseInt(urlParams.get('vpn'), 10); if (isNaN(vpnCount)) vpnCount = 6;}
 let enableTimeout = vpnCount;
@@ -130,6 +130,7 @@ const transformTupleXY = (t1, ang) => {
 
 const mids0L = mids.length;
 const mids0Lm1 = mids0L - 1;
+let midsLast = mids0L;
 const baseVertices = [ ...mids.slice(0, mids0Lm1).map(m => subTuplesXY(m, TRIG30[m[4]])),
   addTuplesXY(mids[mids0L - 2], TRIG30[mids[mids0L - 2][4]]) ];
 
@@ -174,7 +175,6 @@ function setMidTransform(m) {
   const dy =  drawScale * (sqrt3 * m[2] + m[3]) + drawHby2 + panY;
   ctx.setTransform(cos, sin, -sin, cos, dx, dy);}
 
-let midsLast = 0;
 function draw() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -374,7 +374,7 @@ const syncBtn = document.getElementById('sBtn');
 const micBtn = document.getElementById('mBtn');
 let isVoiceOn = false;
 let connectedPeerCount = 0;
-let peersL = 2; //this is "my total peers plus two", or "total peers including me plus one", or "connectedPeerCount plus any unconnected plus any reloaded peer multiplicty plus me plus one"  //"ls.sh" below returns my own peer ID plus an ending blank item which together add two
+let peersL = 2; //this is "my total peers plus two", or "total peers including me plus one", or "connectedPeerCount plus any unconnected plus any reloaded peer multiplicty plus me plus one"  //"ls" below returns my own peer ID plus an ending blank item which together add two
 function updateMicButton() {if (isVoiceOn) micBtn.innerHTML = '<b>Mic to ' + connectedPeerCount + '/' + (peersL-2) + '</b><br>&nbsp;&#127908;&nbsp;';
   else micBtn.innerHTML = '<b>muted to ' + connectedPeerCount + '/' + (peersL-2) + '</b><br><span style="text-decoration: line-through 2px;">&nbsp;&#127908;&nbsp;</span>';}
 function updateConnectedCount() {let count = 0; for (const target in pcs) if (pcs[target].connectionState == 'connected') count++;
@@ -388,14 +388,14 @@ function forgetPC(target) {if ((enableForget > 0) && pcs[target]) {console.warn(
     delete dcs[target]; //dc.onclose does this redundantly, but the browser might trigger this close event with a long delay causing us to reuse the old one and then have that ripped away from us when the browser finishes
     const audioEl = document.getElementById('audio_' + target); if (audioEl) audioEl.remove();}}
 
-const sendSig = (to, body) => fetch(prefix + 'append.sh' + signalsQuerySlash + to, { method: 'POST', body: JSON.stringify({ from: ID, ...body }) }).catch(err => console.warn('Send Signal Error: ' + err));
+const sendSig = (to, body) => fetch(prefix + 'append' + signalsQuery + to, { method: 'POST', body: JSON.stringify({ from: ID, ...body }) }).catch(err => console.warn('Send Signal Error: ' + err));
 
 function resendRandomCans(target) {const pc = pcs[target]; if (!pc || !pc.origPortList || !pc.origPortList.length) return;
   console.log('  RANDOMIZED AGAIN *' + vpnCount + '*' + pc.origPortList.length); let totalString = '';
   for (let idx = 0; idx < pc.origPortList.length; idx++) {const origPort = pc.origPortList[idx]; const candStr = pc.candStrList[idx];
       for (let i = 0; i < vpnCount; i++) {let randPort; do randPort = 1024 + Math.floor(Math.random() * 64512); while (randPort == origPort);
         totalString += (totalString ? ',' : '') + candStr.replace(/ \d+ typ srflx /, ' ' + randPort + ' typ srflx ');}}
-      fetch(prefix + 'append.sh' + signalsQuerySlash + target, { method: 'POST', body: totalString })
+      fetch(prefix + 'append' + signalsQuery + target, { method: 'POST', body: totalString })
         .catch(err => console.warn('Send Batch Signal Error: ' + err));}
 
 let iceServers;
@@ -424,10 +424,10 @@ function initPC(target, isInitiator) {if (!target || pcs[target]) return pcs[tar
       //THIS BLOCK IS COPIED from resendRandomCans above
       for (let i = 0; i < vpnCount; i++) {let randPort; do randPort = 1024 + Math.floor(Math.random() * 64512); while (randPort == origPort);
         totalString += (i ? ',' : '') + candStr.replace(/ \d+ typ srflx /, ' ' + randPort + ' typ srflx ');}
-      fetch(prefix + 'append.sh' + signalsQuerySlash + target, { method: 'POST', body: totalString })
+      fetch(prefix + 'append' + signalsQuery + target, { method: 'POST', body: totalString })
         .catch(err => console.warn('Send Batch Signal Error: ' + err));
 
-    }} else if ((vpnCount == 0) || (e.candidate.type == 'srflx')) sendSig(target, { candidate: e.candidate });}}; //****debug with "?vpn=-1" by ignoring LAN candidates
+    }} else if ((vpnCount == 0) || (e.candidate.type == 'srflx')) sendSig(target, { candidate: e.candidate });}}; //debug with "?vpn=-1" by ignoring LAN candidates
   pc.onicecandidateerror = e => {console.warn('[STUN fail - ' + target + ']', e.url, '->', e.address, ' reflects ', e.hostCandidate, 'Err:', e.errorCode, e.errorText);
     if (e.errorCode == 486) console.warn('  Error 486 - TURN server (--total-quota) is probably full (needs 4 per peer!)');
     if (e.errorCode == 701) console.warn('  Error 701 - Does this STUN server only have IPv4 addresses, but the local IPv6 candidate possibility wanted an IPv6 address from DNS?\n  Ignorable if the local IPv4 candidate succeeded on the same STUN server.');}; //401 for TURN authentication error
@@ -475,14 +475,13 @@ const toggleVoice = async () => {
   else await startVoice();
   updateMicButton();};
 
-
 let pollingInterval = 1500;//pollingInterval = 150000; in console will effectively stop polling for debugging
 let fastInterval = Math.floor(pollingInterval * 0.2);
 let vpnTimeout = Math.floor(pollingInterval * 2.8);
 let fastPollRemainingCount = 0;
 const poll = async () => {
   try {
-    const sRes = await fetch(prefix + 'mv_rm.sh' + signalsQuerySlash + ID + '&peer=' + peersDir + '/' + ID, { cache: 'no-store' });
+    const sRes = await fetch(prefix + 'mv_rm' + signalsQuery + ID, { cache: 'no-store' });
     if (sRes.ok) {const list = await sRes.json();
       for (const s of list) {if (!s.from || s.from === ID) continue;
         let pc = pcs[s.from];
@@ -502,13 +501,14 @@ const poll = async () => {
             //if (s.sdp.type === 'offer' && pc.signalingState !== 'stable') {if (ID < s.from) continue; if (dcs[s.from]) dcs[s.from].close(); await pc.setLocalDescription({ type: 'rollback' });}
 
             await pc.setRemoteDescription(s.sdp);  //**** Once saw this error so I added "s.sdp?.type" print below for future debugging: SDP handling error: InvalidStateError: Failed to execute 'setRemoteDescription' on 'RTCPeerConnection': Failed to set remote answer sdp: Called in wrong state: stable
-            if (s.sdp.type === 'offer') {
-              const t = pc.getTransceivers().find(tr => tr.receiver.track.kind === 'audio');
-              if (t && t.sender) {t.direction = 'sendrecv';
-                if (stream && stream.getAudioTracks()[0]) t.sender.replaceTrack(stream.getAudioTracks()[0]);}
-              else alert('ERROR: audio transceiver somehow never got enabled by offerer ' + s.from);
-              await pc.setLocalDescription(await pc.createAnswer()).catch(err => {alert('NEVER SEEN ERROR: SDP Answer: ' + err); throw err;});
-              sendSig(s.from, { sdp: pc.localDescription });}
+            if (s.sdp.type === 'offer') {if (s.from >= ID) console.warn('Warning: SDP offer from higher (triggered by VPN timeout?) ' + s.from + ' could cause glare and error below if answer now comes [incoming sdp.type: ' + s.sdp?.type + ', signalingState: ' + pc.signalingState + ', iceState: ' + pc.iceConnectionState + ']');
+              if (vpnCount <= 0 || s.from < ID) {
+                const t = pc.getTransceivers().find(tr => tr.receiver.track.kind === 'audio');
+                if (t && t.sender) {t.direction = 'sendrecv';
+                  if (stream && stream.getAudioTracks()[0]) t.sender.replaceTrack(stream.getAudioTracks()[0]);}
+                else alert('ERROR: audio transceiver somehow never got enabled by offerer ' + s.from);
+                await pc.setLocalDescription(await pc.createAnswer()).catch(err => {alert('NEVER SEEN ERROR: SDP Answer: ' + err); throw err;});
+                sendSig(s.from, { sdp: pc.localDescription });}}
           } catch (err) {console.warn('SDP handling error from ' + s.from + ' [incoming sdp.type: ' + s.sdp?.type + ', signalingState: ' + pc.signalingState + ', iceState: ' + pc.iceConnectionState + ']: ' + err); continue;}}
         if (pc.remoteDescription) {while (pc.iceQueue.length) {await pc.addIceCandidate(pc.iceQueue.shift()).catch(err => console.warn('ICE add error:', err));}}
         if (s.candidate) {
@@ -524,14 +524,16 @@ const poll = async () => {
         if (vpnTryPorts > 0) {pc.createdAt = Date.now();
           resendRandomCans(target);} //Give peer more guesses
     }}}
-    //11:10 AM 9/10/2026: (vpnCount <= 0 || s.from < ID) added in "easyForget block" above to reduce "glare" "race condition" between peers who both have "?vpn" (i.e., both have vpnCount > 0).  Without this change, here is the "glare" problem:
+    //11:10 AM 9/10/2026: (vpnCount <= 0 || s.from < ID) added in "easyForget block" above (and then later in 2nd offer check above) to reduce "glare" "race condition" between peers who both have "?vpn" (i.e., both have vpnCount > 0).  Without this change, here is the "glare" problem:
     //  If both timeout at nearly the same time, they both re-cycle and become offerers in poll#1 (resets createdAt),
     //  which makes them both stand down in easyForget and become answerers in poll#2 (resets createdAt),
     //  which makes them both receive answers in poll#3 though they are answerers!
     //    => Console shows a "SDP handling error" "[incoming sdp.type: answer, signalingState: stable, iceState: checking]"
     //Could additionally randomize polling interval time if we really expect two such VPN peers
+    //Even with this change, the lower ID can get an answer after being stable because (I think) it gives an offer, but then reads the old answer, so the new answer comes later?
 
-    const pRes = await fetch(prefix + 'ls.sh?file=' + peersDir, { cache: 'no-store' });  //NEW METHOD: returns a string which is comma-separated elements like bob,alice,134, (has ending comma; unique "empty list" response adds asterisk: *,)
+    //****change order to do this ls peer check before the mv_rm signals check?
+    const pRes = await fetch(prefix + 'ls?file=' + peersDir + ID, { cache: 'no-store' });  //returns a string which is comma-separated elements like bob,alice,134, (has ending comma; unique "empty list" response adds asterisk: *,)
     if (pRes.ok) {const peers = (await pRes.text()).split(',');
       const peersLnew = peers.length; if (peersLnew < 3) console.warn('just me in peers (returns * if peersDir does not exist; also seen on rare occasion when Segmentation Fault occurs during sed string sterilization, causing no_file): (' + peers[0] + ')');
       const last = peers.pop(); if (last !== '') alert('ERROR: peer name (' + last + ') without trailing comma');
@@ -543,13 +545,16 @@ const poll = async () => {
           else if (peersL < peersLnew) fastPollRemainingCount = 6;
         }}
       peersL = peersLnew;}
+
   } catch (err) { console.warn('Signaling Loop Error: ' + err); }
 finally { if (fastPollRemainingCount > 0) {fastPollRemainingCount--; setTimeout(poll, fastInterval);} else {setTimeout(poll, pollingInterval);} }};
 //****check access logs for timing of signals on next call to Florida to make sure fastInterval~300ms is usually helping, or to see if I should shorten it further
 
-const loadBoard = () => fetch(prefix + 'cat.sh' + movesQuery, { cache: 'no-store' })
+const loadBoard = () => fetch(prefix + 'cat' + movesQuery, { cache: 'no-store' })
   .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
-  .then(mList => { mids.length = 0; blockedMids.length = 0; undoStack.length = 0; isSyncing = true; syncBtn.style.backgroundColor = '';
+  .then(mList => {if (!mList) {alert('ERROR: server moves file is proper JSON but somehow null: ' + JSON.stringify(mList)); return;}
+    else if (!mList.length) {console.warn('ERROR: no server seed tiles, so Sync was aborted (only future tiles will be saved to server until Reset): ', mList); return;}
+    mids.length = 0; blockedMids.length = 0; undoStack.length = 0; isSyncing = true; syncBtn.style.backgroundColor = '';
     mList.forEach(locallyAppendMoveIfValid); midsLast = mids.length; hoveredMidIdx = -1; draw();}).catch(err => console.warn('Load Board Error: ' + err));
 
 function doToggle() {currentOptionIdx = (currentOptionIdx + 1) % candidates.length; draw();}
@@ -611,8 +616,8 @@ function doPlace() {if (hoveredMidIdx !== -1 && candidates.length > 0) {const se
   midsLast = mids.length;
   hoveredMidIdx = -1; draw();
   const payload = JSON.stringify(selected); for (const target in dcs) {if (dcs[target].readyState == 'open') dcs[target].send(payload);}
-  if (isSyncing) {fetch(prefix + 'append.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Post Move Error: ' + err));}
-  stringifyStats().then(statsStr => fetch(prefix + 'append.sh' + diagnosticsQuerySlash + ID, { method: 'POST', body: statsStr })).catch(err => console.warn('Diagnostics Log Error: ' + err));
+  if (isSyncing) {fetch(prefix + 'append' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Post Move Error: ' + err));}
+  stringifyStats().then(statsStr => fetch(prefix + 'append' + diagnosticsQuery + ID, { method: 'POST', body: statsStr })).catch(err => console.warn('Diagnostics Log Error: ' + err));
 } else doToggle();} //to help touchscreen case, let's toggle whenever no tile was placable
 canvas.addEventListener('click', doPlace);
 ////****I could add console diagnostics to catch click, pointerdown, pointerup, pointercancel like the following, but it gets complicated to view the console on a mobile phone, so I'd rather just flash some button when these events occur:
@@ -651,7 +656,7 @@ function doReset() {if (confirm("Are you sure you want to clear the board for al
   if (hoveredMidIdx >= mids.length) hoveredMidIdx = -1;
   syncBtn.style.backgroundColor = ''; draw();
   const payload = JSON.stringify(mids);
-  fetch(prefix + 'replace.sh' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Reset Error: ' + err));}}
+  fetch(prefix + 'replace' + movesQuery + '&peer=' + ID, { method: 'POST', body: payload }).catch(err => console.warn('Reset Error: ' + err));}}
 
 let lastHoveredMidIdx = 0;
 function queryHoveredMids(idx1, idx2) { //****Do I want to add a Q (or P) button so touchscreen users can do this?
