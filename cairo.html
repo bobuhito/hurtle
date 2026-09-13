@@ -48,12 +48,14 @@ else if (activeColor.length == 1) activeColor = SOME_COLORS[activeColor] || SOME
 else if (!activeColor.startsWith('#')) activeColor = '#' + activeColor;
 
 const activeText = urlParams.get('t') ?? '';
-const gameDir = urlParams.get('g') ?? 'c';
-const movesQuery = '&file=' + gameDir + '/moves';
-const signalsQuery = '&file=' + gameDir + '/s/';
-const diagnosticsQuery = '&file=' + gameDir + '/d/';
-const peersDir = gameDir + '/p/';
-const prefix = '/p@i@e@c@e@s/?task=';
+const gameDir = '?file=' + (urlParams.get('g') ?? 'c');
+
+const movesQuery = gameDir + '/moves';
+const signalsQuery = gameDir + '/s/';
+const diagnosticsQuery = gameDir + '/d/';
+const peersQuery = gameDir + '/p/';
+//const prefix = '/r-u-n-/?task='; //this method would require changing from '?file=' above to '&file='
+const prefix = '/r-u-n-';
 const ID = activeColor.slice(1) + activeText.replace(/[^a-zA-Z0-9]/g, '');
 let vpnCount = 0; if (urlParams.has('vpn')) {vpnCount = parseInt(urlParams.get('vpn'), 10); if (isNaN(vpnCount)) vpnCount = 6;}
 let enableTimeout = vpnCount;
@@ -412,22 +414,34 @@ function initPC(target, isInitiator) {if (!target || pcs[target]) return pcs[tar
     if (pc.connectionState === 'failed') forgetPC(target); updateConnectedCount();};
   pc.oniceconnectionstatechange = () => console.error('[ICE State - ' + target + ']', pc.iceConnectionState);
   pc.ontrack = e => {
-    if (e.receiver) e.receiver.playoutDelayHint = 0;
+    if (e.receiver) {e.receiver.playoutDelayHint = 0;
+      if ('jitterBufferTarget' in e.receiver) {console.log('zeroing jitterBufferTarget from ' + e.receiver.jitterBufferTarget); e.receiver.jitterBufferTarget = 0;} //added 2:22 AM 9/13/2026
+    }
     let a = document.getElementById('audio_' + target) || document.createElement('audio');
     a.id = 'audio_' + target; a.autoplay = true;
     if (!a.parentNode) document.getElementById('audios').appendChild(a);
-    a.srcObject = e.streams[0] || new MediaStream([e.track]);};
-  pc.onicecandidate = e => {if (e.candidate) {console.log('[STUN cand - ' + target + ']', e.candidate.url, e.candidate.type, e.candidate.address + ':' + e.candidate.port);
+    a.srcObject = e.streams[0] || new MediaStream([e.track]);
+    //a.play().catch(err => console.warn('Audio play error:', err)); // Force play on stream update, but seems to autoplay fine, so comment this out
+  };
+  pc.onicecandidate = e => {if (e.candidate) {let status = 'HIDDEN from ';
     if (vpnCount > 0) {if (e.candidate.type == 'srflx') {const origPort = e.candidate.port; pc.origPortList.push(origPort); const candStr = JSON.stringify({ from: ID, candidate: e.candidate }); pc.candStrList.push(candStr);
 
-      console.log('  RANDOMIZED *' + vpnCount); let totalString = '';
+      status = 'SENT RANDOM*' + vpnCount + ' to '; let totalString = '';
       //THIS BLOCK IS COPIED from resendRandomCans above
       for (let i = 0; i < vpnCount; i++) {let randPort; do randPort = 1024 + Math.floor(Math.random() * 64512); while (randPort == origPort);
         totalString += (i ? ',' : '') + candStr.replace(/ \d+ typ srflx /, ' ' + randPort + ' typ srflx ');}
       fetch(prefix + 'append' + signalsQuery + target, { method: 'POST', body: totalString })
-        .catch(err => console.warn('Send Batch Signal Error: ' + err));
+        .catch(err => console.warn('Send Batch Signal Error: ' + err));}}
 
-    }} else if ((vpnCount == 0) || (e.candidate.type == 'srflx')) sendSig(target, { candidate: e.candidate });}}; //debug with "?vpn=-1" by ignoring LAN candidates
+    else {const mode = -vpnCount;
+      const targetType  = [null, 'srflx', 'host', 'relay'][mode & 3]; // Bits 0–1 (Type)   //debug with "?vpn=-1" (ignores LAN and relay candidates) or "?vpn=-3" (only relay candidates)
+      const ipChar      = [null, '.', ':'][(mode >> 2) & 3];          // Bits 2–3 (IP Version)
+      const targetProto = [null, 'udp', 'tcp'][(mode >> 4) & 3];      // Bits 4–5 (Protocol)
+      if ((!targetType  || e.candidate.type === targetType) &&
+          (!ipChar      || e.candidate.address?.includes(ipChar)) &&
+          (!targetProto || e.candidate.protocol === targetProto))
+        {status = 'sent to '; sendSig(target, { candidate: e.candidate });}}
+    console.log(status + target + ':', e.candidate.type, e.candidate.address + ':' + e.candidate.port, e.candidate.protocol, e.candidate.url || 'local');}};
   pc.onicecandidateerror = e => {console.warn('[STUN fail - ' + target + ']', e.url, '->', e.address, ' reflects ', e.hostCandidate, 'Err:', e.errorCode, e.errorText);
     if (e.errorCode == 486) console.warn('  Error 486 - TURN server (--total-quota) is probably full (needs 4 per peer!)');
     if (e.errorCode == 701) console.warn('  Error 701 - Does this STUN server only have IPv4 addresses, but the local IPv6 candidate possibility wanted an IPv6 address from DNS?\n  Ignorable if the local IPv4 candidate succeeded on the same STUN server.');}; //401 for TURN authentication error
@@ -533,12 +547,12 @@ const poll = async () => {
     //Even with this change, the lower ID can get an answer after being stable because (I think) it gives an offer, but then reads the old answer, so the new answer comes later?
 
     //****change order to do this ls peer check before the mv_rm signals check?
-    const pRes = await fetch(prefix + 'ls&file=' + peersDir + ID, { cache: 'no-store' });  //returns a string which is comma-separated elements like bob,alice,134, (has ending comma; unique "empty list" response adds asterisk: *,)
+    const pRes = await fetch(prefix + 'ls' + peersQuery + ID, { cache: 'no-store' });  //returns a string which is comma-separated elements like bob,alice,134, (has ending comma; unique "empty list" response adds asterisk: *,)
     if (pRes.ok) {const peers = (await pRes.text()).split(',');
-      const peersLnew = peers.length; if (peersLnew < 3) console.warn('just me in peers (returns * if peersDir does not exist; also seen on rare occasion when Segmentation Fault occurs during sed string sterilization, causing no_file): (' + peers[0] + ')');
+      const peersLnew = peers.length; if (peersLnew < 3) console.warn('just me in peers (returns * if peersQuery does not exist; also seen on rare occasion when Segmentation Fault occurs during sed string sterilization, causing no_file): (' + peers[0] + ')');
       const last = peers.pop(); if (last !== '') alert('ERROR: peer name (' + last + ') without trailing comma');
       for (const target of peers) {
-        if (target.length < 6) console.error('ERROR: peer name (' + target + ') should start with 6 color characters, but returns * if peersDir does not exist (which occurs on rare occasion when Segmentation Fault occurs during sed string sterilization, causing no_file)');
+        if (target.length < 6) console.error('ERROR: peer name (' + target + ') should start with 6 color characters, but returns * if peersQuery does not exist (which occurs on rare occasion when Segmentation Fault occurs during sed string sterilization, causing no_file)');
         else if (ID !== target && !pcs[target]) {
           if (fastInit > 0 || ID < target)  //FASTEST****(4 total changes needed): comment this "if (ID < target)" requirement out (and remove the entire else clause out so we never change nextDelay), so both peers initiate (and thereby get ICE candidates immediately, which is the whole point of "FASTEST") simultaneously
             initPC(target, true);
