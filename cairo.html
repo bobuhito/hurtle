@@ -41,7 +41,7 @@ const SOME_COLORS = [
   "#ec4899"  // Hot Pink
 ];
 const urlHost = window.location.hostname;
-const urlParams = new URLSearchParams(window.location.search); //https://site.com?c=0&t=A&g=c&vpn=-1&stun=2&fast=0 forces only public IPs
+const urlParams = new URLSearchParams(window.location.search); //https://site.com?c=0&t=A&g=c&vpn=-1&stun=3&fast=0 forces only public IPs
 let activeColor = urlParams.get('c') || window.location.hash;
 if (!activeColor) {activeColor = '#' + Math.floor(Math.random() * 0xFFFFFF).toString(16).padStart(6, '0'); window.location.hash = activeColor;}
 else if (activeColor.length == 1) activeColor = SOME_COLORS[activeColor] || SOME_COLORS[0];
@@ -60,15 +60,15 @@ const ID = activeColor.slice(1) + activeText.replace(/[^a-zA-Z0-9]/g, '');
 let vpnCount = 0; if (urlParams.has('vpn')) {vpnCount = parseInt(urlParams.get('vpn'), 10); if (isNaN(vpnCount)) vpnCount = 6;}
 let enableTimeout = vpnCount;
 let vpnTryForget = 1;
-let vpnTryOffer = 0; //****easyForget = 0 is probably best when setting vpnTryOffer > 0
+let vpnTryOffer = 0; //easyForget = 0 is probably best when setting vpnTryOffer > 0
 let vpnTryPorts = 0;
 //vpnTryForget = 1; vpnTryOffer = 0; vpnTryPorts = 0;
 //vpnTryForget = 0; vpnTryOffer = 1; vpnTryPorts = 0;
 //vpnTryForget = 0; vpnTryOffer = 0; vpnTryPorts = 1;
 
-//URL's ?stun=0 is default which allows turn, ?stun=1 has no turn and 1 stun server, etc
-let onlyStun = 0; if (vpnCount > 0) onlyStun = 2;
-if (urlParams.has('stun')) {onlyStun = parseInt(urlParams.get('stun'), 10); if (isNaN(onlyStun)) onlyStun = 1;}
+//URL's ?stun=7 is default which allows turn, ?stun=1 has no turn and 1 stun server, etc
+let stunMask = 7; if (vpnCount > 0) stunMask = 3;
+if (urlParams.has('stun')) {stunMask = parseInt(urlParams.get('stun'), 10); if (isNaN(stunMask)) stunMask = 1;}
 
 let enableForget = 1;
 let easyForget = 2;
@@ -400,11 +400,13 @@ function resendRandomCans(target) {const pc = pcs[target]; if (!pc || !pc.origPo
       fetch(prefix + 'append' + signalsQuery + target, { method: 'POST', body: totalString })
         .catch(err => console.warn('Send Batch Signal Error: ' + err));}
 
-let iceServers;
-if      (onlyStun == 0) iceServers = [{urls: ['stun:stun1.l.google.com:19302',         'stun:stun.cloudflare.com:3478']}, {urls: ['turn:' + urlHost + ':3478', 'turn:' + urlHost + ':3478?transport=tcp'], username: 'lamaklamak', credential: 'nunyabizz'}];
-else if (onlyStun == 1) iceServers = [{urls:  'stun:stun1.l.google.com:19302'}];
-else if (onlyStun == 2) iceServers = [{urls: ['stun:stun1.l.google.com:19302',         'stun:stun.cloudflare.com:3478']}];
-else                    iceServers = [{urls:  'stun:stun1.l.google.com:19302'}, {urls: 'stun:stun.cloudflare.com:3478'}];
+
+const iceServers = [];
+if (stunMask & 1)  iceServers.push({urls:  'stun:stun1.l.google.com:19302'});
+if (stunMask & 2)  iceServers.push({urls:  'stun:stun.cloudflare.com:3478'});
+if (stunMask & 4)  iceServers.push({urls: ['turn:'  + urlHost +    ':3478', 'turn:'  + urlHost + ':3478?transport=tcp'], username: 'lamaklamak', credential: 'nunyabizz'});
+if (stunMask & 8)  iceServers.push({urls:  'stun:'  + urlHost +    ':3478'});
+if (stunMask & 16) iceServers.push({urls: ['turns:' + urlHost +    ':5349', 'turns:' + urlHost + ':5349?transport=tcp'], username: 'lamaklamak', credential: 'nunyabizz'});
 
 function initPC(target, isInitiator) {if (!target || pcs[target]) return pcs[target];
 //for (let redundancy = 0; redundancy < 1; redundancy++) {
@@ -434,9 +436,9 @@ function initPC(target, isInitiator) {if (!target || pcs[target]) return pcs[tar
         .catch(err => console.warn('Send Batch Signal Error: ' + err));}}
 
     else {const mode = -vpnCount;
-      const targetType  = [null, 'srflx', 'host', 'relay'][mode & 3]; // Bits 0–1 (Type)   //debug with "?vpn=-1" (ignores LAN and relay candidates) or "?vpn=-3" (only relay candidates)
-      const ipChar      = [null, '.', ':'][(mode >> 2) & 3];          // Bits 2–3 (IP Version)
-      const targetProto = [null, 'udp', 'tcp'][(mode >> 4) & 3];      // Bits 4–5 (Protocol)
+      const targetType  = [null, 'srflx', 'host', 'relay'][mode & 3]; // Bits 0-1 (Type)   //debug with "?vpn=-1" (ignores LAN and relay candidates) or "?vpn=-3" (only relay candidates)
+      const ipChar      = [null, '.', ':'][(mode >> 2) & 3];          // Bits 2-3 (IP Version)
+      const targetProto = [null, 'udp', 'tcp'][(mode >> 4) & 3];      // Bits 4-5 (Protocol)
       if ((!targetType  || e.candidate.type === targetType) &&
           (!ipChar      || e.candidate.address?.includes(ipChar)) &&
           (!targetProto || e.candidate.protocol === targetProto))
@@ -451,7 +453,7 @@ function initPC(target, isInitiator) {if (!target || pcs[target]) return pcs[tar
     dc.onclose = () => delete dcs[target];  //dc.onclose = () => { if (dcs[target] === dc) delete dcs[target]; }; //reconstructed dc is possible, but delete dcs is also done in the teardown
     dcs[target] = dc;};
 
-  //FASTEST****(4 total changes needed): comment out "if (isInitiator)" and its "else" lines below to force both branches (FASTEST = "perfect negotiation" to save one polling cycle: https://w3c.github.io/webrtc-pc/#perfect-negotiation-example)
+  //FASTEST****(4 total changes needed): comment out "if (isInitiator)" and its "else" lines below (to do BOTH the if and else branches in sequence) (FASTEST = "perfect negotiation" to save one polling cycle: https://w3c.github.io/webrtc-pc/#perfect-negotiation-example)
   if (isInitiator)
     {const t = pc.addTransceiver('audio', { direction: 'sendrecv' });
     if (stream && stream.getAudioTracks()[0]) t.sender.replaceTrack(stream.getAudioTracks()[0]);
@@ -490,7 +492,7 @@ const toggleVoice = async () => {
   updateMicButton();};
 
 let pollingInterval = 1500;//pollingInterval = 150000; in console will effectively stop polling for debugging
-let fastInterval = Math.floor(pollingInterval * 0.2);
+let fastInterval = Math.floor(pollingInterval * 0.1); //was working fine with "* 0.2" here and "fastPollRemainingCount = 6" below but now 10:32 PM 9/14/2026 trying 2x faster based on access log candidates usually coming in before the next poll
 let vpnTimeout = Math.floor(pollingInterval * 2.8);
 let fastPollRemainingCount = 0;
 const poll = async () => {
@@ -556,13 +558,13 @@ const poll = async () => {
         else if (ID !== target && !pcs[target]) {
           if (fastInit > 0 || ID < target)  //FASTEST****(4 total changes needed): comment this "if (ID < target)" requirement out (and remove the entire else clause out so we never change nextDelay), so both peers initiate (and thereby get ICE candidates immediately, which is the whole point of "FASTEST") simultaneously
             initPC(target, true);
-          else if (peersL < peersLnew) fastPollRemainingCount = 6;
+          else if (peersL < peersLnew) fastPollRemainingCount = 12; //higher ID sometimes gets speed up only if he discovers the other peer first
         }}
       peersL = peersLnew;}
 
   } catch (err) { console.warn('Signaling Loop Error: ' + err); }
 finally { if (fastPollRemainingCount > 0) {fastPollRemainingCount--; setTimeout(poll, fastInterval);} else {setTimeout(poll, pollingInterval);} }};
-//****check access logs for timing of signals on next call to Florida to make sure fastInterval~300ms is usually helping, or to see if I should shorten it further
+//****check wireshark access logs for timing of signals on next call to Florida to make sure fastInterval~300ms is usually helping, or to see if I should shorten it further
 
 const loadBoard = () => fetch(prefix + 'cat' + movesQuery, { cache: 'no-store' })
   .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
