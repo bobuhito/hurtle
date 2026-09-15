@@ -491,7 +491,7 @@ const toggleVoice = async () => {
   else await startVoice();
   updateMicButton();};
 
-let pollingInterval = 1500000;//****pollingInterval = 150000; in console will effectively stop polling for debugging
+let pollingInterval = 1500;//****pollingInterval = 150000; in console will effectively stop polling for debugging
 let fastInterval = Math.floor(pollingInterval * 0.1); //was working fine with "* 0.2" here and "fastPollRemainingCount = 6" below but now 10:32 PM 9/14/2026 trying 2x faster based on access log candidates usually coming in before the next poll
 let vpnTimeout = Math.floor(pollingInterval * 2.8);
 let fastPollRemainingCount = 0;
