@@ -41,7 +41,7 @@ const SOME_COLORS = [
   "#ec4899"  // Hot Pink
 ];
 const urlHost = window.location.hostname;
-const urlParams = new URLSearchParams(window.location.search); //https://site.com?c=0&t=A&g=c&vpn=-1&stun=3&fast=0 forces only public IPs
+const urlParams = new URLSearchParams(window.location.search); //https://site.com?c=0&t=A&g=c&vpn=-1&stun=7&fast=0 forces only srflx (public IPs) except for me behind router who can't even get srflx (but prflx is fine)
 let activeColor = urlParams.get('c') || window.location.hash;
 if (!activeColor) {activeColor = '#' + Math.floor(Math.random() * 0xFFFFFF).toString(16).padStart(6, '0'); window.location.hash = activeColor;}
 else if (activeColor.length == 1) activeColor = SOME_COLORS[activeColor] || SOME_COLORS[0];
@@ -66,7 +66,7 @@ let vpnTryPorts = 0;
 //vpnTryForget = 0; vpnTryOffer = 1; vpnTryPorts = 0;
 //vpnTryForget = 0; vpnTryOffer = 0; vpnTryPorts = 1;
 
-//URL's ?stun=7 is default which allows turn, ?stun=1 has no turn and 1 stun server, etc
+//URL's ?stun=7 is default which allows turn, ?stun=1 has no turn and 1 stun server, etc...  vpn=-1&stun=0  sends no candidates but fine if other peer sends srflx candidates
 let stunMask = 7; if (vpnCount > 0) stunMask = 3;
 if (urlParams.has('stun')) {stunMask = parseInt(urlParams.get('stun'), 10); if (isNaN(stunMask)) stunMask = 1;}
 
@@ -77,6 +77,8 @@ if (urlParams.has('fast')) {fastInit = parseInt(urlParams.get('fast'), 10); if (
 
 const canvas = document.getElementById('myCanvas');
 const ctx = canvas.getContext('2d');
+const syncBtn = document.getElementById('sBtn');
+const micBtn = document.getElementById('mBtn');
 
 const pcs = {}, dcs = {};
 let stream;
@@ -152,22 +154,6 @@ let currentOptionIdx = 0;
 let hoveredMidIdx = -1;
 const candidates = [];
 
-function getCandidates() {const mid0 = mids[hoveredMidIdx];
-  const mid0just4 = mid0.slice(0, 4);
-  const ang0 = mid0[4];
-  const targetPos = hoveredMidIdx % mids0L;
-  candidates.length = 0;
-  for (let i = 0; i < mids0L; i++) {if (((targetPos % 2) !== (i % 2) && targetPos !== mids0Lm1 && i !== mids0Lm1)    ||    (targetPos === mids0Lm1 && i === mids0Lm1)) {
-    const k = (ang0 - mids[i][4] + 18) % 12;
-    const candMidI = transformTupleXY(mids[i].slice(0, 4), k);
-    const translation = subTuplesXY(mid0just4, candMidI);
-    const cMids = mids.slice(0, mids0L).map(bm => {
-      const transformedM = addTuplesXY(transformTupleXY(bm.slice(0, 4), k), translation);
-      const nAngle = (bm[4] + k) % 12;
-      return [...transformedM, nAngle, activeColor, activeText];});
-    candidates.push(cMids);}}
-  draw();}
-
 let panX = 0, panY = 0, startX = 0, startY = 0, isPanning = false;
 function setMidTransform(m) {
   const [ca, cb, sa, sb] = TRIG30[(m[4] + 10) % 12];   //10%12 is effectively subtracting mids[0][4] but fastest to hard code the number
@@ -234,43 +220,6 @@ function getAngle(ax, bx, ay, by) {
   if (ay === -bx && by === -3 * ax) return isPositive(ay, by) ? 4 : 10;   // 120, 300 
   return -1;}
 
-function getNearestEdgeFromIndex(cIdx) {const mid0 = mids[cIdx];
-  let adSqMin = 0, bdSqMin = 0, nearest = -1;
-  for (let i = 0; i < mids.length; i++) {if (i != cIdx && blockedMids[i] == 0) {
-    const [dax, dbx, day, dby] = subTuplesXY(mid0, mids[i]);
-    const adSq = 2 * (dax * dbx + day * dby), bdSq = 3 * (dax * dax + day * day) + (dbx * dbx + dby * dby); //(X^2+Y^2) INLINED AND PLACED TWICE
-    if (nearest == -1 || isPositive(adSqMin - adSq, bdSqMin - bdSq)) {adSqMin = adSq; bdSqMin = bdSq; nearest = i;}}}
-  console.log('mids[', cIdx,    '] = ', mid0);
-  console.log('mids[', nearest, '] = ', mids[nearest], ' = nearest midpoint');
-  const [dax, dbx, day, dby] = subTuplesXY(mid0, mids[nearest]);
-  console.log('nearest ang=', getAngle(dax, dbx, day, dby));
-  return nearest;}
-
-let includeBlocked = false;
-function getNearestEdgeFromPointer(e) {
-  const rect = canvas.getBoundingClientRect();
-  const mx = (e.clientX - rect.left - drawWby2 - panX);
-  const my = (e.clientY - rect.top  - drawHby2 - panY);
-  let minDist = Infinity, nearest = -1;
-  for (let i = 0; i < mids.length; i++) {if (includeBlocked || (blockedMids[i] === 0)) {
-    const d = Math.hypot(mx - drawScale * (sqrt3 * mids[i][0] + mids[i][1]), my - drawScale * (sqrt3 * mids[i][2] + mids[i][3]));
-    if (d < minDist) { minDist = d; nearest = i; }}}
-  return minDist < previewScale ? nearest : -1;}
-
-canvas.addEventListener('pointerdown', e => {const nearest = getNearestEdgeFromPointer(e); //Website needs to best support desktops (with a mouse) and laptops (with a trackpad).  Smartphones and other touchscreens also must be supported, but the methods for toggling rotation candidates and placing tiles may be awkward.
-  if (nearest !== -1 && e.pointerType === 'touch') {isPanning = false; if (hoveredMidIdx !== nearest) {
-    //3:39 AM 8/29/2026 added draw to doToggle and commented this out to see if it works better for touchscreen: e.preventDefault(); //GEMINI says I need this (but I found no improvement with it): Suppresses synthetic click ONLY on initial selection
-    hoveredMidIdx = nearest; getCandidates();}} //for touchscreens: preventDefault (to avoid normal phone's panning, so that this site can instead use its own pan) should not be needed because CSS "touch-action: pinch-zoom;" is used
-  else {isPanning = true; if (hoveredMidIdx !== nearest) hoveredMidIdx = -1; startX = e.clientX; startY = e.clientY;}});
-canvas.addEventListener('pointermove', e => {if (!isPanning) {const nearest = getNearestEdgeFromPointer(e);
-  if (nearest !== -1 && hoveredMidIdx !== nearest) {hoveredMidIdx = nearest; getCandidates();}}});
-canvas.addEventListener('pointerup', e => {
-  if (isPanning) {isPanning = false;
-    const dx = e.clientX - startX;
-    const dy = e.clientY - startY;
-    if (Math.hypot(dx, dy) > previewScale) {panX += dx; panY += dy; hoveredMidIdx = -1; draw();}}});
-
-
 const subTuple = (t1, t2) => [t1[0] - t2[0], t1[1] - t2[1]];
 const mulTuple = (t1, t2) => [t1[0] * t2[1] + t1[1] * t2[0], 3 * t1[0] * t2[0] + t1[1] * t2[1]];
 const divTuple = (t1, t2) => {const denom = t2[1] * t2[1] - 3 * t2[0] * t2[0];
@@ -314,7 +263,6 @@ function getEdgeIntersectionDistances(idx1, idx2) {
   //return { t1, t2 };
   return intersects;
 }
-
 
 let totalText = '';
 const chatBox = document.getElementById('wideBox');
@@ -371,9 +319,14 @@ function locallyAppendMoveIfValid(m) {
   undoStack.push({pairedIndices, numNewMids: mids0L});
   return true;}
 
+const loadBoard = () => fetch(prefix + 'cat' + movesQuery, { cache: 'no-store' })
+  .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
+  .then(mList => {if (!mList) {alert('ERROR: server moves file is proper JSON but somehow null: ' + JSON.stringify(mList)); return;}
+    else if (!mList.length) {console.warn('ERROR: no server seed tiles, so Sync was aborted (only future tiles will be saved to server until Reset): ', mList); return;}
+    mids.length = 0; blockedMids.length = 0; undoStack.length = 0; isSyncing = true; syncBtn.style.backgroundColor = '';
+    mList.forEach(locallyAppendMoveIfValid); midsLast = mids.length; hoveredMidIdx = -1; draw();}).catch(err => console.warn('Load Board Error: ' + err));
+loadBoard();
 
-const syncBtn = document.getElementById('sBtn');
-const micBtn = document.getElementById('mBtn');
 let isVoiceOn = false;
 let connectedPeerCount = 0;
 let peersL = 2; //this is "my total peers plus two", or "total peers including me plus one", or "connectedPeerCount plus any unconnected plus any reloaded peer multiplicty plus me plus one"  //"ls" below returns my own peer ID plus an ending blank item which together add two
@@ -382,7 +335,6 @@ function updateMicButton() {if (isVoiceOn) micBtn.innerHTML = '<b>Mic to ' + con
 function updateConnectedCount() {let count = 0; for (const target in pcs) if (pcs[target].connectionState == 'connected') count++;
   if (connectedPeerCount < count) {micBtn.style.backgroundColor = '#fca5a5'; setTimeout(() => { micBtn.style.backgroundColor = ''; }, 1000);}
   connectedPeerCount = count; updateMicButton();}
-
 
 function forgetPC(target) {if ((enableForget > 0) && pcs[target]) {console.warn('[Teardown] Clearing dead connection for ' + target);
     pcs[target].close();
@@ -446,7 +398,7 @@ function initPC(target, isInitiator) {if (!target || pcs[target]) return pcs[tar
     console.log(status + target + ':', e.candidate.type, e.candidate.address + ':' + e.candidate.port, e.candidate.protocol, e.candidate.url || 'local');}};
   pc.onicecandidateerror = e => {console.warn('[STUN fail - ' + target + ']', e.url, '->', e.address, ' reflects ', e.hostCandidate, 'Err:', e.errorCode, e.errorText);
     if (e.errorCode == 486) console.warn('  Error 486 - TURN server (--total-quota) is probably full (needs 4 per peer!)');
-    if (e.errorCode == 701) console.warn('  Error 701 - Does this STUN server only have IPv4 addresses, but the local IPv6 candidate possibility wanted an IPv6 address from DNS?\n  Ignorable if the local IPv4 candidate succeeded on the same STUN server.');}; //401 for TURN authentication error
+    if (e.errorCode == 701) console.warn('  Error 701 - Is STUN/TURN server on LAN?  Or, is it on IPv4-only WAN, but the local IPv6 candidate possibility wanted an IPv6 address from DNS?\n  Ignore any IPv6 failure if the local IPv4 candidate succeeded on the same STUN/TURN server.');}; //401 for TURN authentication error
   const attachDC = dc => {dc.onmessage = e => {
       try {locallyAppendMoveIfValid(JSON.parse(e.data)); draw();}
       catch (err) {alert('DataChannel Message Error: ' + err);}};
@@ -464,7 +416,6 @@ function initPC(target, isInitiator) {if (!target || pcs[target]) return pcs[tar
     {pc.ondatachannel = e => attachDC(e.channel);}
 //}
   return pc;}
-
 
 const audioConstraints = { echoCancellation: false, noiseSuppression: false, autoGainControl: false }; //****allowing bad audio since these default to true and make jitter buffer about 300ms one-way!
 const startVoice = async () => {
@@ -491,7 +442,7 @@ const toggleVoice = async () => {
   else await startVoice();
   updateMicButton();};
 
-let pollingInterval = 1500;//****pollingInterval = 150000; in console will effectively stop polling for debugging
+let pollingInterval = 1500;//pollingInterval = 150000; in console will effectively stop polling for debugging
 let fastInterval = Math.floor(pollingInterval * 0.1); //was working fine with "* 0.2" here and "fastPollRemainingCount = 6" below but now 10:32 PM 9/14/2026 trying 2x faster based on access log candidates usually coming in before the next poll
 let vpnTimeout = Math.floor(pollingInterval * 2.8);
 let fastPollRemainingCount = 0;
@@ -516,7 +467,7 @@ const poll = async () => {
             //if (s.sdp.type === 'offer' && (pc.signalingState === 'have-local-offer' || pc.iceGatheringState !== 'new')) {if (ID < s.from) continue; if (pc.signalingState === 'have-local-offer') {await pc.setLocalDescription({ type: 'rollback' });}}
             //if (s.sdp.type === 'offer' && pc.signalingState !== 'stable') {if (ID < s.from) continue; if (dcs[s.from]) dcs[s.from].close(); await pc.setLocalDescription({ type: 'rollback' });}
 
-            await pc.setRemoteDescription(s.sdp);  //**** Once saw this error so I added "s.sdp?.type" print below for future debugging: SDP handling error: InvalidStateError: Failed to execute 'setRemoteDescription' on 'RTCPeerConnection': Failed to set remote answer sdp: Called in wrong state: stable
+            await pc.setRemoteDescription(s.sdp);
             if (s.sdp.type === 'offer') {if (s.from >= ID) console.warn('Warning: SDP offer from higher (triggered by VPN timeout?) ' + s.from + ' could cause glare and error below if answer now comes [incoming sdp.type: ' + s.sdp?.type + ', signalingState: ' + pc.signalingState + ', iceState: ' + pc.iceConnectionState + ']');
               if (vpnCount <= 0 || s.from < ID) {
                 const t = pc.getTransceivers().find(tr => tr.receiver.track.kind === 'audio');
@@ -548,7 +499,6 @@ const poll = async () => {
     //Could additionally randomize polling interval time if we really expect two such VPN peers
     //Even with this change, the lower ID can get an answer after being stable because (I think) it gives an offer, but then reads the old answer, so the new answer comes later?
 
-    //****change order to do this ls peer check before the mv_rm signals check?
     const pRes = await fetch(prefix + 'ls' + peersQuery + ID, { cache: 'no-store' });  //returns a string which is comma-separated elements like bob,alice,134, (has ending comma; unique "empty list" response adds asterisk: *,)
     if (pRes.ok) {const peers = (await pRes.text()).split(',');
       const peersLnew = peers.length; if (peersLnew < 3) console.warn('just me in peers (returns * if peersQuery does not exist; also seen on rare occasion when Segmentation Fault occurs during sed string sterilization, causing no_file): (' + peers[0] + ')');
@@ -564,16 +514,7 @@ const poll = async () => {
 
   } catch (err) { console.warn('Signaling Loop Error: ' + err); }
 finally { if (fastPollRemainingCount > 0) {fastPollRemainingCount--; setTimeout(poll, fastInterval);} else {setTimeout(poll, pollingInterval);} }};
-//****check wireshark access logs for timing of signals on next call to Florida to make sure fastInterval~300ms is usually helping, or to see if I should shorten it further
-
-const loadBoard = () => fetch(prefix + 'cat' + movesQuery, { cache: 'no-store' })
-  .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
-  .then(mList => {if (!mList) {alert('ERROR: server moves file is proper JSON but somehow null: ' + JSON.stringify(mList)); return;}
-    else if (!mList.length) {console.warn('ERROR: no server seed tiles, so Sync was aborted (only future tiles will be saved to server until Reset): ', mList); return;}
-    mids.length = 0; blockedMids.length = 0; undoStack.length = 0; isSyncing = true; syncBtn.style.backgroundColor = '';
-    mList.forEach(locallyAppendMoveIfValid); midsLast = mids.length; hoveredMidIdx = -1; draw();}).catch(err => console.warn('Load Board Error: ' + err));
-
-function doToggle() {if (candidates.length > 0) {currentOptionIdx = (currentOptionIdx + 1) % candidates.length; draw();}}
+//****check wireshark access logs for timing of signals on next call to Florida to make sure fastInterval~150ms is usually helping, or to see if I should shorten it further
 
 const lineSeparator = ' | ';
 //const lineSeparator = '\n';
@@ -626,6 +567,77 @@ async function stringifyStats() {let totalString = ''; for (const [peerId, peerC
 return totalString;}
 //stringifyStats().then(console.log);
 
+function getCandidates() {const mid0 = mids[hoveredMidIdx];
+  const mid0just4 = mid0.slice(0, 4);
+  const ang0 = mid0[4];
+  const targetPos = hoveredMidIdx % mids0L;
+  candidates.length = 0;
+  for (let i = 0; i < mids0L; i++) {if (((targetPos % 2) !== (i % 2) && targetPos !== mids0Lm1 && i !== mids0Lm1)    ||    (targetPos === mids0Lm1 && i === mids0Lm1)) {
+    const k = (ang0 - mids[i][4] + 18) % 12;
+    const candMidI = transformTupleXY(mids[i].slice(0, 4), k);
+    const translation = subTuplesXY(mid0just4, candMidI);
+    const cMids = mids.slice(0, mids0L).map(bm => {
+      const transformedM = addTuplesXY(transformTupleXY(bm.slice(0, 4), k), translation);
+      const nAngle = (bm[4] + k) % 12;
+      return [...transformedM, nAngle, activeColor, activeText];});
+    candidates.push(cMids);}}
+  draw();}
+//checkTransform is not used but for console debugging:
+function checkTransform() {for (let hoveredMidIdx=0; hoveredMidIdx < mids.length; hoveredMidIdx+=mids0L) {const mid0 = mids[hoveredMidIdx];
+  const mid0just4 = mid0.slice(0, 4);
+  const ang0 = mid0[4];
+  const targetPos = hoveredMidIdx % mids0L;
+  const midIdxRef = hoveredMidIdx - targetPos;
+  for (let i = 0; i < mids0L; i++) {if (targetPos === i) {
+    const k = (ang0 - mids[i][4] + 12) % 12;
+    const candMidI = transformTupleXY(mids[i].slice(0, 4), k);
+    const translation = subTuplesXY(mid0just4, candMidI);
+    for (let idx = 0; idx < mids0L; idx++) {const bm = mids[idx];
+        const transformedM = addTuplesXY(transformTupleXY(bm.slice(0, 4), k), translation);
+        const nAngle = (bm[4] + k) % 12;
+        const hoveredM = mids[midIdxRef + idx];
+        const match = transformedM[0] == hoveredM[0] &&
+                      transformedM[1] == hoveredM[1] &&
+                      transformedM[2] == hoveredM[2] &&
+                      transformedM[3] == hoveredM[3] &&
+                      nAngle          == hoveredM[4];
+        console.log((midIdxRef + idx) + ' idx ' + idx + ' match: ' + match);}}}}}
+//getNearestEdgeFromIndex is not used but for console debugging:
+function getNearestEdgeFromIndex(cIdx) {const mid0 = mids[cIdx];
+  let adSqMin = 0, bdSqMin = 0, nearest = -1;
+  for (let i = 0; i < mids.length; i++) {if (i != cIdx && blockedMids[i] == 0) {
+    const [dax, dbx, day, dby] = subTuplesXY(mid0, mids[i]);
+    const adSq = 2 * (dax * dbx + day * dby), bdSq = 3 * (dax * dax + day * day) + (dbx * dbx + dby * dby); //(X^2+Y^2) INLINED AND PLACED TWICE
+    if (nearest == -1 || isPositive(adSqMin - adSq, bdSqMin - bdSq)) {adSqMin = adSq; bdSqMin = bdSq; nearest = i;}}}
+  console.log('mids[', cIdx,    '] = ', mid0);
+  console.log('mids[', nearest, '] = ', mids[nearest], ' = nearest midpoint');
+  const [dax, dbx, day, dby] = subTuplesXY(mid0, mids[nearest]);
+  console.log('nearest ang=', getAngle(dax, dbx, day, dby));
+  return nearest;}
+let includeBlocked = false;
+function getNearestEdgeFromPointer(e) {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left - drawWby2 - panX);
+  const my = (e.clientY - rect.top  - drawHby2 - panY);
+  let minDist = Infinity, nearest = -1;
+  for (let i = 0; i < mids.length; i++) {if (includeBlocked || (blockedMids[i] === 0)) {
+    const d = Math.hypot(mx - drawScale * (sqrt3 * mids[i][0] + mids[i][1]), my - drawScale * (sqrt3 * mids[i][2] + mids[i][3]));
+    if (d < minDist) { minDist = d; nearest = i; }}}
+  return minDist < previewScale ? nearest : -1;}
+canvas.addEventListener('pointerdown', e => {const nearest = getNearestEdgeFromPointer(e); //Website needs to best support desktops (with a mouse) and laptops (with a trackpad).  Smartphones and other touchscreens also must be supported, but the methods for toggling rotation candidates and placing tiles may be awkward.
+  if (nearest !== -1 && e.pointerType === 'touch') {isPanning = false; if (hoveredMidIdx !== nearest) {
+    //3:39 AM 8/29/2026 added draw to doToggle and commented this out to see if it works better for touchscreen: e.preventDefault(); //GEMINI says I need this (but I found no improvement with it): Suppresses synthetic click ONLY on initial selection
+    hoveredMidIdx = nearest; getCandidates();}} //for touchscreens: preventDefault (to avoid normal phone's panning, so that this site can instead use its own pan) should not be needed because CSS "touch-action: pinch-zoom;" is used
+  else {isPanning = true; if (hoveredMidIdx !== nearest) hoveredMidIdx = -1; startX = e.clientX; startY = e.clientY;}});
+canvas.addEventListener('pointermove', e => {if (!isPanning) {const nearest = getNearestEdgeFromPointer(e);
+  if (nearest !== -1 && hoveredMidIdx !== nearest) {hoveredMidIdx = nearest; getCandidates();}}});
+canvas.addEventListener('pointerup', e => {
+  if (isPanning) {isPanning = false;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    if (Math.hypot(dx, dy) > previewScale) {panX += dx; panY += dy; hoveredMidIdx = -1; draw();}}});
+
+function doToggle() {if (candidates.length > 0) {currentOptionIdx = (currentOptionIdx + 1) % candidates.length; draw();}}
 function doPlace() {if (hoveredMidIdx !== -1 && candidates.length > 0) {const selected = candidates[currentOptionIdx % candidates.length];
   if (!locallyAppendMoveIfValid(selected)) return;
   midsLast = mids.length;
@@ -637,7 +649,6 @@ function doPlace() {if (hoveredMidIdx !== -1 && candidates.length > 0) {const se
 canvas.addEventListener('click', doPlace);
 ////****I could add console diagnostics to catch click, pointerdown, pointerup, pointercancel like the following, but it gets complicated to view the console on a mobile phone, so I'd rather just flash some button when these events occur:
 //canvas.addEventListener('click', e => {console.log('CLICK', e.pointerType, e.timeStamp, e); doPlace();});
-
 let berryState = Date.now() | 0;
 //let berryState = 0x12345678; //use any seed here
 const berryState0 = berryState;
@@ -647,7 +658,6 @@ function berryRand(N) {berryState = (berryState + 0x6D2B79F5) | 0;
   const rand32 = (t ^ (t >>> 14)) >>> 0;
   currentOptionIdx = (rand32 >>> 16) & 1; //Using (rand32 >>> 10), if N is a mutliple of 2^11=2048 this is 100% biased.  We usually don't get so high, but it seems no harm in 31 (or 16 to still get comfort of the previous step causing mixing) instead of 10
   return rand32 % N;} //random 32-bit uint [0, 4294967295] modulo N
-
 function doRandomPlace() {
   hoveredMidIdx = berryRand(mids.length);
   while (blockedMids[hoveredMidIdx] == 1) hoveredMidIdx = berryRand(mids.length);
@@ -798,7 +808,7 @@ window.addEventListener('keydown', e => { if (['TEXTAREA', 'INPUT'].includes(e.t
   else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyR') {e.preventDefault(); doReset();}});
 
 draw();
-loadBoard(); poll();
+poll();
 </script>
 </body>
 </html>
