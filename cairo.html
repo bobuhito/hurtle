@@ -21,7 +21,7 @@
     <button onclick="doPlace()"><b>Place Tile</b><br>click</button>
     <button onclick="undo()"><b>Undo</b><br>backspace</button>
     <button onclick="doReset()"><b>Reset</b><br>ctrl-R</button>
-    <button id="sBtn" onclick="loadBoard()"><b>Sync</b><br>S</button>
+    <button id="sBtn" onclick="loadBoardRaw()"><b>Sync</b><br>S</button>
     <button id="mBtn" onclick="toggleVoice()"><b>alone</b><br><span style="text-decoration: line-through 2px;">&nbsp;&#127908;&nbsp;</span></button>
   </nav>
   <textarea id="wideBox" rows="4"></textarea>
@@ -48,8 +48,10 @@ else if (activeColor.length == 1) activeColor = SOME_COLORS[activeColor] || SOME
 else if (!activeColor.startsWith('#')) activeColor = '#' + activeColor;
 
 const activeText = urlParams.get('t') ?? '';
-const gameDir = '?file=' + (urlParams.get('g') ?? 'c');
+const activeGame = urlParams.get('g') ?? 'c';
+const movesFile = activeGame + '/moves';
 
+const gameDir = '?file=' + activeGame;
 const movesQuery = gameDir + '/moves';
 const signalsQuery = gameDir + '/s/';
 const diagnosticsQuery = gameDir + '/d/';
@@ -148,7 +150,7 @@ const pentagonPath = new Path2D();            pentagonPath.moveTo(sqrt3 * baseVe
 for (let i = 1; i < baseVertices.length; i++) pentagonPath.lineTo(sqrt3 * baseVertices[i][0] + baseVertices[i][1], sqrt3 * baseVertices[i][2] + baseVertices[i][3]);
 pentagonPath.closePath();
 
-let isSyncing = false;
+let isSyncing = true; //4:00 AM 9/24/2026 changed to true so that empty moves file will get future plays
 
 let currentOptionIdx = 0;
 let hoveredMidIdx = -1;
@@ -284,11 +286,11 @@ function locallyAppendMoveIfValid(m) {
   const midsLold = mids.length; mids.push(...m); const midsLnew = mids.length;
   blockedMids.length = midsLnew; blockedMids.fill(0, midsLold); 
   const pairedIndices = [];
-  const fail = () => {alert('USER ERROR: tile edges cross, so choose differently');
+  const fail = () => {alert('ERROR: tile edges cross, so choose differently (or, if caused by another player, Sync board after any Undo sequence)');
     for (let ip = 0; ip < pairedIndices.length; ip++) blockedMids[pairedIndices[ip]] = 0;
     mids.length = midsLold; blockedMids.length = midsLold;};
 
-  //used console.time() to mesure speed improvement: originally 259 tiles take 5ms to finish outer loop (550 tiles take 10ms); "if (i % 5 == 0)" loop runs 626 tiles with 2ms being about worst case (for a surrounded tile)
+  //used console.time() to measure speed improvement: originally 259 tiles take 5ms to finish outer loop (550 tiles take 10ms); "if (i % 5 == 0)" loop runs 626 tiles with 2ms being about worst case (for a surrounded tile)
   for (let cIdx = midsLold; cIdx < midsLnew; cIdx++) {const mid0 = mids[cIdx];
   let i = 0; while (i < midsLold) {
       if (i % 5 == 0  &&  ((Math.abs((mids[cIdx][0] - mids[i][0])*sqrt3 + mids[cIdx][1] - mids[i][1]) > 42) || (Math.abs((mids[cIdx][2] - mids[i][2])*sqrt3 + mids[cIdx][3] - mids[i][3]) > 80))) {i += 5; continue;} //screens out obvious far-away tiles: 24*sqrt(3)=41.6 is the furthest two points (so midpoints allow an even smaller rule) of touching L=12 Cairo pentagons can lie apart from each other
@@ -319,13 +321,30 @@ function locallyAppendMoveIfValid(m) {
   undoStack.push({pairedIndices, numNewMids: mids0L});
   return true;}
 
-const loadBoard = () => fetch(prefix + 'cat' + movesQuery, { cache: 'no-store' })
-  .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
+//original slow CGI method (cat itself tolerates "line-merging by adding commas" and tolerates extra commas):
+const loadBoard = () => fetch(prefix + 'cat' + movesQuery, { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
   .then(mList => {if (!mList) {alert('ERROR: server moves file is proper JSON but somehow null: ' + JSON.stringify(mList)); return;}
     else if (!mList.length) {console.warn('ERROR: no server seed tiles, so Sync was aborted (only future tiles will be saved to server until Reset): ', mList); return;}
     mids.length = 0; blockedMids.length = 0; undoStack.length = 0; isSyncing = true; syncBtn.style.backgroundColor = '';
     mList.forEach(locallyAppendMoveIfValid); midsLast = mids.length; hoveredMidIdx = -1; draw();}).catch(err => console.warn('Load Board Error: ' + err));
-loadBoard();
+//fastest but does not tolerate "line-merging by adding commas" (though it tolerates extra commas):
+const loadBoardLines = () => fetch(movesFile, { cache: 'no-store' }).then(r => r.ok ? r.text() : Promise.reject('HTTP ' + r.status))
+  .then(rawText => {const trimmed = rawText.trim(); if (!trimmed) {console.warn('ERROR: no raw-lines server seed tiles, so Sync was aborted (only future tiles will be saved to server until Reset): ', trimmed); return;}
+    //const lines = trimmed.split(/\s*\n\s*/);
+	const lines = trimmed.split('\n');
+	if (!lines || !lines.length) {console.warn('ERROR: raw-lines server seed tile list is empty'); return;}
+    mids.length = 0; blockedMids.length = 0; undoStack.length = 0; isSyncing = true; syncBtn.style.backgroundColor = '';
+    lines.forEach(line => {const cleanLine = line.replace(/^[\s,]+|[\s,]+$/g, ''); if (cleanLine) locallyAppendMoveIfValid(JSON.parse(cleanLine));}); midsLast = mids.length; hoveredMidIdx = -1; draw();}).catch(err => console.warn('Load Board Raw-Lines Error: ' + err));
+//fast and tolerates "line-merging by adding commas" and tolerates extra commas:
+const loadBoardRaw = () => fetch(movesFile, { cache: 'no-store' }).then(r => r.ok ? r.text() : Promise.reject('HTTP ' + r.status))
+  .then(rawText => {const trimmed = rawText.trim(); if (!trimmed) {console.warn('ERROR: no raw server seed tiles, so Sync was aborted (only future tiles will be saved to server until Reset): ', trimmed); return;}
+	//const mList = JSON.parse('[' + trimmed.replace(/\s*\n\s*/g, ',').replace(/,,+/g, ',').replace(/^,/, '').replace(/,$/, '') + ']');
+	const mList = JSON.parse('[' + trimmed.replace(/[\s,]*\n[\s,]*/g, ',').replace(/^,+/, '').replace(/,+$/, '') + ']');
+	if (!mList || !mList.length) {console.warn('ERROR: raw server seed tile list is empty'); return;}	
+    mids.length = 0; blockedMids.length = 0; undoStack.length = 0; isSyncing = true; syncBtn.style.backgroundColor = '';
+    mList.forEach(locallyAppendMoveIfValid); midsLast = mids.length; hoveredMidIdx = -1; draw();}).catch(err => console.warn('Load Board Raw Error: ' + err));
+loadBoardRaw(); //loadBoardRaw's fast execution should ensure that new players fetch moves before any other fetch starts and therefore trigger any server "new player" alerts
+
 
 let isVoiceOn = false;
 let connectedPeerCount = 0;
@@ -797,7 +816,7 @@ function queryHoveredMids(idx1, idx2) { //****Do I want to add a Q (or P) button
 let qCount = 0;
 window.addEventListener('keydown', e => { if (['TEXTAREA', 'INPUT'].includes(e.target.tagName)) return;
        if (e.code === 'Space') {e.preventDefault(); doToggle();}
-  else if (e.code === 'KeyS')  {e.preventDefault(); loadBoard();}
+  else if (e.code === 'KeyS')  {e.preventDefault(); loadBoardRaw();}
   else if (e.code === 'KeyP')  {e.preventDefault(); doRandomPlace();}
   else if (e.code === 'KeyU' || e.code === 'Backspace')   {e.preventDefault(); undo();}
   else if (e.code === 'KeyQ')  {e.preventDefault();
