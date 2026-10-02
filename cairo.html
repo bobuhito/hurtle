@@ -273,14 +273,20 @@ chatBox.addEventListener('keydown', e => {if (e.key === 'Enter' && !e.shiftKey) 
     const currentVal = chatBox.value;
     let i = 0; while (i < totalText.length && i < currentVal.length && totalText[i] === currentVal[i]) i++;
     const m = currentVal.slice(i);
-    if (m.trim()) {const payload = JSON.stringify(m);
-      for (const target in dcs) {if (dcs[target].readyState == 'open') dcs[target].send(payload);}
-      totalText += m + '\n'; chatBox.value = totalText; chatBox.scrollTop = chatBox.scrollHeight;
+    if (m.trim()) {
+	  const payload = JSON.stringify(m); for (const target in dcs) {if (dcs[target].readyState == 'open') dcs[target].send(payload);}
+      locallyAppendMoveIfValid(m);
+	  //if (m[0] == '<') document.querySelector('main').innerHTML = m;
+      //else {totalText += m + '\n'; chatBox.value = totalText; chatBox.scrollTop = chatBox.scrollHeight;}
     }}});
 
 const undoStack = [];
 function locallyAppendMoveIfValid(m) {
-  if (typeof m === 'string') {totalText += m + '\n'; chatBox.value = totalText; chatBox.scrollTop = chatBox.scrollHeight; return true;}
+  if (typeof m == 'string') {
+    if (!chatBox.isConnected) document.querySelector('main').insertAdjacentHTML('beforeend', '<hr style="margin: 24px 0;">' + m);
+	else if (m[0] == '<') document.querySelector('main').innerHTML = m; //or chatBox.outerHTML = m;
+    else {totalText += m + '\n'; chatBox.value = totalText; chatBox.scrollTop = chatBox.scrollHeight;}
+    return true;}
   if (!m || !Array.isArray(m) || m.length !== mids0L) {syncBtn.style.backgroundColor = '#fca5a5'; console.warn('WARNING: peer hit undo? sync probably needed (isSyncing=true so placing tiles on new tiles could register illegal moves at the server!): expected a tile containing exactly' + mids0L + 'mids'); return false;} //In the future, I might add "isSyncing=false" here for a different undo saving method
 
   const midsLold = mids.length; mids.push(...m); const midsLnew = mids.length;
@@ -533,7 +539,6 @@ const poll = async () => {
 
   } catch (err) { console.warn('Signaling Loop Error: ' + err); }
 finally { if (fastPollRemainingCount > 0) {fastPollRemainingCount--; setTimeout(poll, fastInterval);} else {setTimeout(poll, pollingInterval);} }};
-//****check wireshark access logs for timing of signals on next call to Florida to make sure fastInterval~150ms is usually helping, or to see if I should shorten it further
 
 const lineSeparator = ' | ';
 //const lineSeparator = '\n';
