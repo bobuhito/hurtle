@@ -10,7 +10,7 @@
     body { display: flex; align-items: stretch; gap: 8px; margin: 8px; }
     .controls { display: flex; height: 48px; }
     .controls button { flex: 1; font-size: 16px; }
-    #wideBox { text-align: center; font-size: 36px; font-family: "Comic Sans MS"; line-height: 1.2; resize: vertical; border: none; }
+    #wideBox { text-align: center; font-size: 36px; font-family: "Comic Sans MS"; line-height: 1.2; resize: vertical; border: none; scroll-behavior: smooth; }
   </style>
 </head>
 <body>
@@ -266,26 +266,44 @@ function getEdgeIntersectionDistances(idx1, idx2) {
   return intersects;
 }
 
-let totalText = '';
+let chatTotal = '';
 const chatBox = document.getElementById('wideBox');
 chatBox.addEventListener('keydown', e => {if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     const currentVal = chatBox.value;
-    let i = 0; while (i < totalText.length && i < currentVal.length && totalText[i] === currentVal[i]) i++;
+    let i = 0; while (i < chatTotal.length && i < currentVal.length && chatTotal[i] === currentVal[i]) i++;
     const m = currentVal.slice(i);
     if (m.trim()) {
 	  const payload = JSON.stringify(m); for (const target in dcs) {if (dcs[target].readyState == 'open') dcs[target].send(payload);}
       locallyAppendMoveIfValid(m);
-	  //if (m[0] == '<') document.querySelector('main').innerHTML = m;
-      //else {totalText += m + '\n'; chatBox.value = totalText; chatBox.scrollTop = chatBox.scrollHeight;}
     }}});
 
+const mainEl = document.querySelector('main');
+let mTotal = ''; //accumulates a string of either plaintext (for chatBox if it has not yet been replaced) or HTML (for all of main which starts with a chatbox, but the chatox might get replaced)
+function updateHTML(p) {
+  //if (chatBox.isConnected && mTotal[0]!=' ' && mTotal[0]!='<') {chatTotal += mTotal + '\n'; chatBox.value = chatTotal; chatBox.scrollTo({ top: chatBox.scrollHeight, behavior: 'smooth' });}
+  if (chatBox.isConnected && mTotal[0]!=' ' && mTotal[0]!='<') {chatTotal += mTotal + '\n'; chatBox.value = chatTotal; chatBox.scrollTop = chatBox.scrollHeight;}
+  //else if (p == 2) {mainEl.insertAdjacentHTML('beforeend',  '<hr style="margin: 24px 0;">' + mTotal); window.scrollTo({behavior: 'smooth', top: document.body.scrollHeight});}
+  else if (p == 2) {mainEl.insertAdjacentHTML('beforeend',  '<hr style="margin: 24px 0;">' + mTotal); mainEl.lastElementChild.scrollIntoView({block: 'end',   behavior: 'smooth'});}
+  //else if (p == 2) {mainEl.insertAdjacentHTML('beforeend',  '<hr style="margin: 24px 0;">' + mTotal); mainEl.scrollIntoView({block: 'end',   behavior: 'smooth'});}  //start, end, nearest are all useful
+  //else if (p == 0) {mainEl.insertAdjacentHTML('afterbegin', mTotal + '<hr style="margin: 24px 0;">'); window.scrollTo({behavior: 'smooth', top: 0});}
+  else if (p == 0) {mainEl.insertAdjacentHTML('afterbegin', mTotal + '<hr style="margin: 24px 0;">'); mainEl.firstElementChild.scrollIntoView({block: 'start', behavior: 'smooth'});}
+  else             {mainEl.innerHTML = mTotal;}
+  mTotal = '';
+}
+
 const undoStack = [];
-function locallyAppendMoveIfValid(m) {
+function locallyAppendMoveIfValid(m) { //to allow for simple discrimination, this cannot receive "<3" as a chat message?  " <  <3" could be made to work but still needs changes
   if (typeof m == 'string') {
-    if (!chatBox.isConnected) document.querySelector('main').insertAdjacentHTML('beforeend', '<hr style="margin: 24px 0;">' + m);
-	else if (m[0] == '<') document.querySelector('main').innerHTML = m; //or chatBox.outerHTML = m;
-    else {totalText += m + '\n'; chatBox.value = totalText; chatBox.scrollTop = chatBox.scrollHeight;}
+    if (m[0] == ' ') {if       (m[1] == '<') {if      (m[2] == '<')  mTotal += m.slice(3);                      //only " <<html" accumulates html (needed to overcome 262144 byte limit by WebRTC)
+                                              else if (m[2] == ' ') {mTotal += m.slice(3); updateHTML( 2);}
+                                              else                  {mTotal += m.slice(1); updateHTML(-1);}}
+                      else {if (m[1] == ' ') {if      (m[2] == ' ')  mTotal += m.slice(3);
+                                            //else if (m[2] == '<')  mTotal += m.slice(2);
+                                              else                   mTotal += m.slice(2);}
+                            else                                     mTotal += m.slice(1);
+                                                                                           updateHTML(-1);}}
+    else                                                            {mTotal += m;          updateHTML( 2);}
     return true;}
   if (!m || !Array.isArray(m) || m.length !== mids0L) {syncBtn.style.backgroundColor = '#fca5a5'; console.warn('WARNING: peer hit undo? sync probably needed (isSyncing=true so placing tiles on new tiles could register illegal moves at the server!): expected a tile containing exactly' + mids0L + 'mids'); return false;} //In the future, I might add "isSyncing=false" here for a different undo saving method
 
@@ -466,6 +484,17 @@ const toggleVoice = async () => {
   if (isVoiceOn) stopVoice();
   else await startVoice();
   updateMicButton();};
+async function useTabAudio() { //only used from console for "on-hold music"
+  const tabStream = await navigator.mediaDevices.getDisplayMedia({video:true, audio:true}); //****also experiment with video:false which might work in some browsers
+  const tabAudioTrack = tabStream.getAudioTracks()[0];
+  tabStream.getVideoTracks().forEach(t => t.stop());
+  if (!tabAudioTrack) {alert("No audio track selected! Make sure to check 'Share tab audio'."); return;}
+  if (stream) {stream.getAudioTracks().forEach(track => track.stop()); stream = null;}
+  tabAudioTrack.onended = () => startVoice();
+  for (const target in pcs) {const pc = pcs[target];
+    const t = pc.getTransceivers().find(tr => tr.receiver && tr.receiver.track && tr.receiver.track.kind === 'audio');
+    if (t && t.sender) t.sender.replaceTrack(tabAudioTrack).catch(err => alert('replaceTrack tabAudioTrack error: ' + err));}}
+
 
 let pollingInterval = 1500;//pollingInterval = 150000; in console will effectively stop polling for debugging
 let fastInterval = Math.floor(pollingInterval * 0.1); //was working fine with "* 0.2" here and "fastPollRemainingCount = 6" below but now 10:32 PM 9/14/2026 trying 2x faster based on access log candidates usually coming in before the next poll
@@ -823,6 +852,7 @@ window.addEventListener('keydown', e => { if (['TEXTAREA', 'INPUT'].includes(e.t
        if (e.code === 'Space') {e.preventDefault(); doToggle();}
   else if (e.code === 'KeyS')  {e.preventDefault(); loadBoardRaw();}
   else if (e.code === 'KeyP')  {e.preventDefault(); doRandomPlace();}
+  else if (e.code === 'KeyH')  {e.preventDefault(); useTabAudio();}  //put "on hold" by using audio from tab
   else if (e.code === 'KeyU' || e.code === 'Backspace')   {e.preventDefault(); undo();}
   else if (e.code === 'KeyQ')  {e.preventDefault();
     qCount++; if (qCount == 3) {qCount = 0; includeBlocked = false;} else includeBlocked = true;
