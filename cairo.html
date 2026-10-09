@@ -278,19 +278,26 @@ chatBox.addEventListener('keydown', e => {if (e.key === 'Enter' && !e.shiftKey) 
       locallyAppendMoveIfValid(m);
     }}});
 
+let autoScroll = 2;
+let replaceForFirstHTML = true;
 const mainEl = document.querySelector('main');
 let mTotal = ''; //accumulates a string of either plaintext (for chatBox if it has not yet been replaced) or HTML (for all of main which starts with a chatbox, but the chatox might get replaced)
 function updateHTML(p) {
-  //if (chatBox.isConnected && mTotal[0]!=' ' && mTotal[0]!='<') {chatTotal += mTotal + '\n'; chatBox.value = chatTotal; chatBox.scrollTo({ top: chatBox.scrollHeight, behavior: 'smooth' });}
-  if (chatBox.isConnected && mTotal[0]!=' ' && mTotal[0]!='<') {chatTotal += mTotal + '\n'; chatBox.value = chatTotal; chatBox.scrollTop = chatBox.scrollHeight;}
-  //else if (p == 2) {mainEl.insertAdjacentHTML('beforeend',  '<hr style="margin: 24px 0;">' + mTotal); window.scrollTo({behavior: 'smooth', top: document.body.scrollHeight});}
-  else if (p == 2) {mainEl.insertAdjacentHTML('beforeend',  '<hr style="margin: 24px 0;">' + mTotal); mainEl.lastElementChild.scrollIntoView({block: 'end',   behavior: 'smooth'});}
-  //else if (p == 2) {mainEl.insertAdjacentHTML('beforeend',  '<hr style="margin: 24px 0;">' + mTotal); mainEl.scrollIntoView({block: 'end',   behavior: 'smooth'});}  //start, end, nearest are all useful
-  //else if (p == 0) {mainEl.insertAdjacentHTML('afterbegin', mTotal + '<hr style="margin: 24px 0;">'); window.scrollTo({behavior: 'smooth', top: 0});}
-  else if (p == 0) {mainEl.insertAdjacentHTML('afterbegin', mTotal + '<hr style="margin: 24px 0;">'); mainEl.firstElementChild.scrollIntoView({block: 'start', behavior: 'smooth'});}
+  if      (chatBox.isConnected && mTotal[0]!=' ' && mTotal[0]!='<') {chatTotal += mTotal + '\n'; chatBox.value = chatTotal; chatBox.scrollTop = chatBox.scrollHeight;}
+  //chatBox.scrollTo({ top: chatBox.scrollHeight, behavior: 'smooth' });  //works as well as above line
+  else if (chatBox.isConnected && replaceForFirstHTML) {mainEl.innerHTML = mTotal;}
+  else if (p == 2) {mainEl.insertAdjacentHTML('beforeend',  '<hr style="margin: 24px 0;">' + mTotal);
+    if      (autoScroll > 1) window.scrollTo({behavior: 'smooth', top: document.body.scrollHeight});
+    else if (autoScroll > 0) window.scrollBy({behavior: 'smooth', top: 150});
+    //mainEl.scrollIntoView({block: 'end',     behavior: 'smooth'});  //works as well as first line //start, end, nearest are all useful
+    //mainEl.lastElementChild.scrollIntoView({block: 'end',   behavior: 'smooth'}); //last element is often a non-visual script, so there is no scrolling!
+  }
+  else if (p == 0) {mainEl.insertAdjacentHTML('afterbegin', mTotal + '<hr style="margin: 24px 0;">');
+    if      (autoScroll > 1) window.scrollTo({behavior: 'smooth', top: 0});
+    else if (autoScroll > 0) window.scrollBy({behavior: 'smooth', top: -150}); //maybe pointless since Gemini says "an insert disturbs a reader who is below the insert, but NOT one who is above the insert"
+  }
   else             {mainEl.innerHTML = mTotal;}
-  mTotal = '';
-}
+  mTotal = '';}
 
 const undoStack = [];
 function locallyAppendMoveIfValid(m) { //to allow for simple discrimination, this cannot receive "<3" as a chat message?  " <  <3" could be made to work but still needs changes
