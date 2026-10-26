@@ -18,48 +18,51 @@
     <pre id="output">Click the button above to generate raw fingerprint data...</pre>
 
     <script>
-        function getExtendedRawFingerprint() {
-            const canvas = document.createElement('canvas');
-            canvas.width = 200;
-            canvas.height = 50;
-            const ctx = canvas.getContext('2d');
-            ctx.textBaseline = "top";
-            ctx.font = "14px 'Arial'";
-            ctx.fillStyle = "#f60";
-            ctx.fillRect(125, 1, 62, 20);
-            ctx.fillStyle = "#069";
-            ctx.fillText("Hurtle.123!", 2, 15);
-            ctx.fillStyle = "rgba(102, 204, 0, 0.7)";
-            ctx.fillText("Hurtle.123!", 4, 17);
-            const canvasDataUrl = canvas.toDataURL();
+function getExtendedRawFingerprint() {
+    // 1. Canvas 2D
+    const canvas2d = document.createElement('canvas');
+    canvas2d.width = 200;
+    canvas2d.height = 50;
+    const ctx = canvas2d.getContext('2d');
+    ctx.textBaseline = "top";
+    ctx.font = "14px 'Arial'";
+    ctx.fillStyle = "#f60";
+    ctx.fillRect(125, 1, 62, 20);
+    ctx.fillStyle = "#069";
+    ctx.fillText("Hurtle.123!", 2, 15);
+    ctx.fillStyle = "rgba(102, 204, 0, 0.7)";
+    ctx.fillText("Hurtle.123!", 4, 17);
+    const canvasDataUrl = canvas2d.toDataURL();
 
-            const gl = canvas.getContext('webgl');
-            let glParams = { vendor: 'unknown', renderer: 'unknown', maxTextureSize: 'unknown' };
-            if (gl) {
-                const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
-                glParams = {
-                    vendor: debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : 'unknown',
-                    renderer: debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : 'unknown',
-                    maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE)
-                };
-            }
+    // 2. Separate Canvas for WebGL
+    const canvasGl = document.createElement('canvas');
+    const gl = canvasGl.getContext('webgl');
+    let glParams = { vendor: 'unknown', renderer: 'unknown', maxTextureSize: 'unknown' };
+    if (gl) {
+        const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+        glParams = {
+            vendor: debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : 'unknown',
+            renderer: debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : 'unknown',
+            maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE)
+        };
+    }
 
-            return {
-                userAgent: navigator.userAgent,
-                cores: navigator.hardwareConcurrency || 'unknown',
-                memory: navigator.deviceMemory || 'unknown',
-                maxTouchPoints: navigator.maxTouchPoints || 0,
-                resolution: `${screen.width}x${screen.height}x${screen.colorDepth}`,
-                pixelRatio: window.devicePixelRatio || 1,
-                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                language: navigator.language || navigator.userLanguage || 'unknown',
-                platform: navigator.platform || 'unknown',
-                canvasDataUrl: canvasDataUrl,
-                glVendor: glParams.vendor,
-                glRenderer: glParams.renderer,
-                maxTextureSize: glParams.maxTextureSize
-            };
-        }
+    return {
+        userAgent: navigator.userAgent,
+        cores: navigator.hardwareConcurrency || 'unknown',
+        memory: navigator.deviceMemory || 'unknown',
+        maxTouchPoints: navigator.maxTouchPoints || 0,
+        resolution: `${screen.width}x${screen.height}x${screen.colorDepth}`,
+        pixelRatio: window.devicePixelRatio || 1,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        language: navigator.language || navigator.userLanguage || 'unknown',
+        platform: navigator.platform || 'unknown',
+        canvasDataUrl: canvasDataUrl,
+        glVendor: glParams.vendor,
+        glRenderer: glParams.renderer,
+        maxTextureSize: glParams.maxTextureSize
+    };
+}
 
         document.getElementById('collectBtn').addEventListener('click', () => {
             const fp = getExtendedRawFingerprint();
