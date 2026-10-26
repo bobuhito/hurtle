@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Browser Fingerprint Demo</title>
+    <style>
+        body { font-family: monospace; background: #1e1e1e; color: #d4d4d4; padding: 20px; }
+        button { background: #007acc; color: white; border: none; padding: 10px 20px; cursor: pointer; font-family: monospace; font-size: 14px; }
+        button:hover { background: #005999; }
+        pre { background: #2d2d2d; padding: 15px; border: 1px solid #444; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+    </style>
+</head>
+<body>
+    <h2>Browser Raw Fingerprint Demo</h2>
+    <p>Gathers unhashed hardware and browser properties without prompting.</p>
+    <button id="collectBtn">Collect Fingerprint</button>
+    <h3>Results:</h3>
+    <pre id="output">Click the button above to generate raw fingerprint data...</pre>
+
+    <script>
+        function getExtendedRawFingerprint() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 200;
+            canvas.height = 50;
+            const ctx = canvas.getContext('2d');
+            ctx.textBaseline = "top";
+            ctx.font = "14px 'Arial'";
+            ctx.fillStyle = "#f60";
+            ctx.fillRect(125, 1, 62, 20);
+            ctx.fillStyle = "#069";
+            ctx.fillText("Hurtle.123!", 2, 15);
+            ctx.fillStyle = "rgba(102, 204, 0, 0.7)";
+            ctx.fillText("Hurtle.123!", 4, 17);
+            const canvasDataUrl = canvas.toDataURL();
+
+            const gl = canvas.getContext('webgl');
+            let glParams = { vendor: 'unknown', renderer: 'unknown', maxTextureSize: 'unknown' };
+            if (gl) {
+                const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+                glParams = {
+                    vendor: debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : 'unknown',
+                    renderer: debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : 'unknown',
+                    maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE)
+                };
+            }
+
+            return {
+                userAgent: navigator.userAgent,
+                cores: navigator.hardwareConcurrency || 'unknown',
+                memory: navigator.deviceMemory || 'unknown',
+                maxTouchPoints: navigator.maxTouchPoints || 0,
+                resolution: `${screen.width}x${screen.height}x${screen.colorDepth}`,
+                pixelRatio: window.devicePixelRatio || 1,
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                language: navigator.language || navigator.userLanguage || 'unknown',
+                platform: navigator.platform || 'unknown',
+                canvasDataUrl: canvasDataUrl,
+                glVendor: glParams.vendor,
+                glRenderer: glParams.renderer,
+                maxTextureSize: glParams.maxTextureSize
+            };
+        }
+
+        document.getElementById('collectBtn').addEventListener('click', () => {
+            const fp = getExtendedRawFingerprint();
+            document.getElementById('output').textContent = JSON.stringify(fp, null, 2);
+        });
+    </script>
+</body>
+</html>
