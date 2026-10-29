@@ -40,7 +40,6 @@ const SOME_COLORS = [
   "#eab308", // Gold / Yellow
   "#ec4899"  // Hot Pink
 ];
-const urlHost = window.location.hostname;
 const urlParams = new URLSearchParams(window.location.search); //https://site.com?c=0&t=A&g=c&vpn=-1&stun=7&fast=0 forces only srflx (public IPs) except for me behind router who can't even get srflx (but prflx is fine)
 let activeColor = urlParams.get('c') || window.location.hash;
 if (!activeColor) {activeColor = '#' + Math.floor(Math.random() * 0xFFFFFF).toString(16).padStart(6, '0'); window.location.hash = activeColor;}
@@ -402,8 +401,9 @@ function resendRandomCans(target) {const pc = pcs[target]; if (!pc || !pc.origPo
       fetch(prefix + 'append' + signalsQuery + target, { method: 'POST', body: totalString })
         .catch(err => console.warn('Send Batch Signal Error: ' + err));}
 
-
 const iceServers = [];
+let urlHost = window.location.hostname;
+if (urlHost[0] < '0' || urlHost[0] > '9') urlHost = 'tdrct.' + urlHost;
 if (stunMask & 1)  iceServers.push({urls:  'stun:stun1.l.google.com:19302'});
 if (stunMask & 2)  iceServers.push({urls:  'stun:stun.cloudflare.com:3478'});
 if (stunMask & 4)  iceServers.push({urls: ['turn:'  + urlHost +    ':3478', 'turn:'  + urlHost + ':3478?transport=tcp'], username: 'lamaklamak', credential: 'nunyabizz'});
@@ -444,7 +444,7 @@ function initPC(target, isInitiator) {if (!target || pcs[target]) return pcs[tar
       if ((!targetType  || e.candidate.type === targetType) &&
           (!ipChar      || e.candidate.address?.includes(ipChar)) &&
           (!targetProto || e.candidate.protocol === targetProto))
-        {status = 'sent to '; sendSig(target, { candidate: e.candidate });}}
+        {status = 'sent to '; sendSig(target, { candidate: e.candidate });}} //****When TURN server is not running, Firefox (I think Chrome preempts earlier and never even triggers onIceCandidate) prints: "sent to 368fe8: null null:null null local"
     console.log(status + target + ':', e.candidate.type, e.candidate.address + ':' + e.candidate.port, e.candidate.protocol, e.candidate.url || 'local');}};
   pc.onicecandidateerror = e => {console.warn('[STUN fail - ' + target + ']', e.url, '->', e.address, ' reflects ', e.hostCandidate, 'Err:', e.errorCode, e.errorText);
     if (e.errorCode == 486) console.warn('  Error 486 - TURN server (--total-quota) is probably full (needs 4 per peer!)');
